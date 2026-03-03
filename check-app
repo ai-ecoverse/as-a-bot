@@ -2,7 +2,7 @@
 
 # Simple wrapper for check-app-installation.sh
 # Usage: ./check-app owner/repo
-# Example: ./check-app trieloff/as-a-bot
+# Example: ./check-app ai-ecoverse/as-a-bot
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -10,7 +10,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # Check if argument is provided
 if [ "$#" -ne 1 ]; then
     echo "Usage: $0 <owner/repo>"
-    echo "Example: $0 trieloff/as-a-bot"
+    echo "Example: $0 ai-ecoverse/as-a-bot"
     exit 1
 fi
 
@@ -20,7 +20,7 @@ IFS='/' read -r OWNER REPO <<< "$1"
 # Validate the split
 if [ -z "$OWNER" ] || [ -z "$REPO" ]; then
     echo "Error: Invalid repository format. Use owner/repo"
-    echo "Example: $0 trieloff/as-a-bot"
+    echo "Example: $0 ai-ecoverse/as-a-bot"
     exit 1
 fi
 

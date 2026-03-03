@@ -49,7 +49,7 @@ curl -X POST \
   -H "Authorization: Bearer $TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
-  "https://api.github.com/repos/trieloff/as-a-bot/issues/1/comments" \
+  "https://api.github.com/repos/ai-ecoverse/as-a-bot/issues/1/comments" \
   -d "$json_payload" \
   -w "\nHTTP Status: %{http_code}\n" | jq '.'
 

@@ -44,7 +44,7 @@ encoded_content=$(echo "$file_content" | base64 | tr -d '\n')
 curl -X PUT \
   -H "Authorization: Bearer $TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
-  "https://api.github.com/repos/trieloff/as-a-bot/contents/token-broker-demo.md" \
+  "https://api.github.com/repos/ai-ecoverse/as-a-bot/contents/token-broker-demo.md" \
   -d "$(jq -n \
     --arg content "$encoded_content" \
     --arg message "demo: create file using token from broker [skip ci]" \

@@ -22,10 +22,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/trieloff/as-a-bot.git"
+    "url": "git+https://github.com/ai-ecoverse/as-a-bot.git"
   },
   "bugs": {
-    "url": "https://github.com/trieloff/as-a-bot/issues"
+    "url": "https://github.com/ai-ecoverse/as-a-bot/issues"
   },
-  "homepage": "https://github.com/trieloff/as-a-bot#readme"
+  "homepage": "https://github.com/ai-ecoverse/as-a-bot#readme"
 }

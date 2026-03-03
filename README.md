@@ -1,6 +1,6 @@
 # GitHub App Token Broker for ai-aligned-gh
 
-[![28% Vibe_Coded](https://img.shields.io/badge/28%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/trieloff/vibe-coded-badge-action)
+[![28% Vibe_Coded](https://img.shields.io/badge/28%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
 
 A minimal Cloudflare Worker that provides user-to-server GitHub tokens via device flow for `ai-aligned-gh`. 
 
@@ -26,7 +26,7 @@ A minimal Cloudflare Worker that provides user-to-server GitHub tokens via devic
 
 ```bash
 # Clone and install
-git clone https://github.com/trieloff/as-a-bot
+git clone https://github.com/ai-ecoverse/as-a-bot
 cd as-a-bot
 npm install
 
@@ -138,14 +138,14 @@ GitHub API calls show proper user attribution
 
 ## Related Projects
 
-Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** - a comprehensive ecosystem of tools for AI-assisted development:
+Part of the **[AI Ecoverse](https://github.com/ai-ecoverse/.github)** - a comprehensive ecosystem of tools for AI-assisted development:
 
-- **[yolo](https://github.com/trieloff/yolo)** - AI CLI launcher with worktree isolation
-- **[ai-aligned-git](https://github.com/trieloff/ai-aligned-git)** - Git wrapper for safe AI commit practices
-- **[ai-aligned-gh](https://github.com/trieloff/ai-aligned-gh)** - GitHub CLI wrapper for proper AI attribution
-- **[vibe-coded-badge-action](https://github.com/trieloff/vibe-coded-badge-action)** - Badge showing AI-generated code percentage
-- **[gh-workflow-peek](https://github.com/trieloff/gh-workflow-peek)** - Smarter GitHub Actions log filtering
-- **[upskill](https://github.com/trieloff/upskill)** - Install Claude/Agent skills from other repositories
+- **[yolo](https://github.com/ai-ecoverse/yolo)** - AI CLI launcher with worktree isolation
+- **[ai-aligned-git](https://github.com/ai-ecoverse/ai-aligned-git)** - Git wrapper for safe AI commit practices
+- **[ai-aligned-gh](https://github.com/ai-ecoverse/ai-aligned-gh)** - GitHub CLI wrapper for proper AI attribution
+- **[vibe-coded-badge-action](https://github.com/ai-ecoverse/vibe-coded-badge-action)** - Badge showing AI-generated code percentage
+- **[gh-workflow-peek](https://github.com/ai-ecoverse/gh-workflow-peek)** - Smarter GitHub Actions log filtering
+- **[upskill](https://github.com/ai-ecoverse/gh-upskill)** - Install Claude/Agent skills from other repositories
 
 ## 📄 License
 

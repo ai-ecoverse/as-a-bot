@@ -10,7 +10,7 @@ fi
 
 BODY='{"owner":"trieloff","repo":"as-a-bot"}'
 
-echo "Getting installation token for trieloff/as-a-bot..."
+echo "Getting installation token for ai-ecoverse/as-a-bot..."
 response=$(curl -sS -X POST https://as-bot-worker.minivelos.workers.dev/token \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $GITHUB_TOKEN" \
