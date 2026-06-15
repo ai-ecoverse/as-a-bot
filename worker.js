@@ -229,13 +229,119 @@ async function handleUserTokenPoll(request, env, body) {
     
     // Calculate expiration
     const expiresAt = new Date(Date.now() + (data.expires_in || 28800) * 1000).toISOString();
-    
+    // When the GitHub App has user-token expiration enabled, the exchange also
+    // returns a refresh_token (and refresh_token_expires_in, ~6 months). Pass it
+    // through so the client can silently renew the ~8h access token instead of
+    // forcing a fresh interactive device-flow login. Older clients ignore it.
+    const refreshTokenExpiresAt = data.refresh_token_expires_in
+      ? new Date(Date.now() + data.refresh_token_expires_in * 1000).toISOString()
+      : null;
+
     return new Response(JSON.stringify({
       access_token: finalToken,
       token_type: data.token_type || 'bearer',
       expires_at: expiresAt,
+      expires_in: data.expires_in || 28800,
+      refresh_token: data.refresh_token || null,
+      refresh_token_expires_at: refreshTokenExpiresAt,
       scope: data.scope,
       app_attribution: finalToken !== data.access_token // Indicate if we got an installation token
+    }), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store'
+      }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({
+      error: 'server_error',
+      error_description: error.message
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// Handle /user-token/refresh endpoint
+// Renews an expired (or soon-to-expire) user-to-server token using the
+// refresh_token issued during the device flow. GitHub requires client_secret
+// for the refresh_token grant (unlike the device-code exchange), so this MUST
+// happen on the broker — the CLI never holds the app secret.
+async function handleUserTokenRefresh(request, env, body) {
+  const { refresh_token } = body;
+
+  if (!refresh_token) {
+    return new Response(JSON.stringify({
+      error: 'refresh_token is required'
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  const clientId = env.GITHUB_CLIENT_ID;
+  const clientSecret = env.GITHUB_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    return new Response(JSON.stringify({
+      error: 'server_error',
+      error_description: 'Token refresh not configured on this server'
+    }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  // OAuth endpoints are on github.com, not api.github.com
+  const url = 'https://github.com/login/oauth/access_token';
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    grant_type: 'refresh_token',
+    refresh_token: refresh_token
+  });
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: params.toString()
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      // e.g. bad_refresh_token once the refresh token itself expires (~6 months).
+      // The client falls back to an interactive device-flow login on this.
+      return new Response(JSON.stringify({
+        error: data.error,
+        error_description: data.error_description
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const expiresAt = new Date(Date.now() + (data.expires_in || 28800) * 1000).toISOString();
+    const refreshTokenExpiresAt = data.refresh_token_expires_in
+      ? new Date(Date.now() + data.refresh_token_expires_in * 1000).toISOString()
+      : null;
+
+    return new Response(JSON.stringify({
+      access_token: data.access_token,
+      token_type: data.token_type || 'bearer',
+      expires_at: expiresAt,
+      expires_in: data.expires_in || 28800,
+      // GitHub rotates the refresh token on each use; return the new one.
+      refresh_token: data.refresh_token || null,
+      refresh_token_expires_at: refreshTokenExpiresAt,
+      scope: data.scope
     }), {
       status: 200,
       headers: {
@@ -276,6 +382,7 @@ export default {
         endpoints: {
           '/user-token/start': 'Start device flow (POST)',
           '/user-token/poll': 'Poll device flow (POST)',
+          '/user-token/refresh': 'Refresh an expired user token (POST)',
           '/auth/start': 'Start web flow (POST)',
           '/auth/callback': 'OAuth callback (GET)',
           '/auth/poll': 'Poll web flow (POST)'
@@ -329,7 +436,11 @@ export default {
         case '/user-token/poll':
           response = await handleUserTokenPoll(request, env, body);
           break;
-        
+
+        case '/user-token/refresh':
+          response = await handleUserTokenRefresh(request, env, body);
+          break;
+
         default:
           response = new Response(JSON.stringify({
             error: 'Not found'

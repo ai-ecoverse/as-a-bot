@@ -134,6 +134,7 @@ describe('Worker Tests', () => {
       GITHUB_APP_PRIVATE_KEY: TEST_PRIVATE_KEY,
       GITHUB_APP_ID: '123456',
       GITHUB_CLIENT_ID: 'Iv1.abc123def456',
+      GITHUB_CLIENT_SECRET: 'test_client_secret',
       GITHUB_API: 'https://api.github.com',
       ALLOWED_ORIGINS: 'https://example.com',
       RATE_LIMIT: {
@@ -254,27 +255,26 @@ describe('Worker Tests', () => {
         };
       }
       
-      // Mock device flow poll
+      // Mock device flow poll / token refresh (same GitHub OAuth endpoint).
+      // Includes refresh_token so we can assert the broker forwards it.
       if (urlStr.includes('/login/oauth/access_token')) {
+        const oauthResponse = {
+          access_token: 'ghu_usertoken456',
+          token_type: 'bearer',
+          expires_in: 28800,
+          refresh_token: 'ghr_refreshtoken789',
+          refresh_token_expires_in: 15897600,
+          scope: 'repo user'
+        };
         return {
           ok: true,
           status: 200,
           headers: new Map([['content-type', 'application/json']]),
           async json() {
-            return {
-              access_token: 'ghu_usertoken456',
-              token_type: 'bearer',
-              expires_in: 28800,
-              scope: 'repo user'
-            };
+            return oauthResponse;
           },
           async text() {
-            return JSON.stringify({
-              access_token: 'ghu_usertoken456',
-              token_type: 'bearer',
-              expires_in: 28800,
-              scope: 'repo user'
-            });
+            return JSON.stringify(oauthResponse);
           }
         };
       }
@@ -334,6 +334,47 @@ describe('Worker Tests', () => {
     assert.equal(data.token_type, 'bearer');
     assert.ok(data.expires_at);
     assert.ok(data.scope);
+    // The refresh token must be forwarded so the client can renew silently.
+    assert.equal(data.refresh_token, 'ghr_refreshtoken789');
+    assert.ok(data.refresh_token_expires_at);
   });
-  
+
+  test('/user-token/refresh endpoint', async () => {
+    const body = JSON.stringify({ refresh_token: 'ghr_oldrefreshtoken' });
+
+    const request = new Request('https://example.com/user-token/refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: body
+    });
+
+    const response = await worker.default.fetch(request, env, ctx);
+    assert.equal(response.status, 200);
+
+    const data = await response.json();
+    assert.ok(data.access_token);
+    assert.equal(data.token_type, 'bearer');
+    assert.ok(data.expires_at);
+    // GitHub rotates the refresh token; the new one must come back.
+    assert.equal(data.refresh_token, 'ghr_refreshtoken789');
+  });
+
+  test('/user-token/refresh requires a refresh_token', async () => {
+    const request = new Request('https://example.com/user-token/refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
+    });
+
+    const response = await worker.default.fetch(request, env, ctx);
+    assert.equal(response.status, 400);
+
+    const data = await response.json();
+    assert.ok(data.error);
+  });
+
 });
