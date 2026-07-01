@@ -18,7 +18,7 @@
   "license": "MIT",
   "devDependencies": {
     "miniflare": "^3.20250718.1",
-    "wrangler": "^3.114.14"
+    "wrangler": "^4.0.0"
   },
   "repository": {
     "type": "git",
