@@ -77,6 +77,78 @@ function serveUrlFor(request, key) {
   return `${new URL(request.url).origin}/i/${key}`;
 }
 
+function hexToBase64(hex) {
+  let binary = '';
+  for (let i = 0; i < hex.length; i += 2) {
+    binary += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Validate an offer payload. Returns { error } on failure, or the validated
+ * { owner, repo, hash, ext, uploadUrl, uploadHeaders, ttl } on success.
+ * Exported for tests.
+ */
+export function validateOfferPayload(body) {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { error: 'Request body must be a JSON object' };
+  }
+
+  const { owner, repo, hash, ext, upload_url, upload_headers, expires_in } = body;
+
+  const coordError = validateCoordinates(owner, repo, hash, ext);
+  if (coordError) {
+    return { error: coordError };
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(upload_url);
+  } catch {
+    return { error: 'upload_url is not a valid URL' };
+  }
+  if (parsedUrl.protocol !== 'https:' || !parsedUrl.hostname.endsWith(UPLOAD_HOST_SUFFIX)) {
+    return { error: `upload_url must be an https URL on *${UPLOAD_HOST_SUFFIX}` };
+  }
+
+  if (typeof upload_headers !== 'object' || upload_headers === null || Array.isArray(upload_headers)) {
+    return { error: 'upload_headers must be an object' };
+  }
+  const entries = Object.entries(upload_headers);
+  if (entries.length > MAX_UPLOAD_HEADERS) {
+    return { error: 'Too many upload_headers' };
+  }
+  const uploadHeaders = {};
+  for (const [name, value] of entries) {
+    if (!/^[A-Za-z0-9-]+$/.test(name) || typeof value !== 'string') {
+      return { error: `Invalid upload header: ${name}` };
+    }
+    uploadHeaders[name.toLowerCase()] = value;
+  }
+
+  // The security model requires every pre-signed URL to be bound to the
+  // offered content hash: the uploader must send x-amz-checksum-sha256 with
+  // exactly this value, and (because x-amz-* headers must be signed) an URL
+  // that was not signed for it will be rejected by R2. Refuse offers that
+  // don't carry the binding.
+  const expectedChecksum = hexToBase64(hash);
+  if (uploadHeaders['x-amz-checksum-sha256'] !== expectedChecksum) {
+    return { error: 'upload_headers must include x-amz-checksum-sha256 set to the base64 encoding of hash' };
+  }
+
+  let ttl = DEFAULT_OFFER_TTL_S;
+  if (expires_in !== undefined) {
+    const parsed = Number(expires_in);
+    if (!Number.isFinite(parsed)) {
+      return { error: 'expires_in must be a number' };
+    }
+    ttl = Math.min(Math.max(Math.floor(parsed), MIN_OFFER_TTL_S), MAX_OFFER_TTL_S);
+  }
+
+  return { owner, repo, hash, ext, uploadUrl: upload_url, uploadHeaders, ttl };
+}
+
 // Handle POST /image-upload/offer (called by the image-upload workflow)
 export async function handleImageOffer(request, env, body) {
   if (!env.IMAGE_OFFERS) {
@@ -98,12 +170,11 @@ export async function handleImageOffer(request, env, body) {
     return jsonResponse({ error: 'invalid_oidc_token', error_description: error.message }, 401);
   }
 
-  const { owner, repo, hash, ext, upload_url, upload_headers, expires_in } = body;
-
-  const validationError = validateCoordinates(owner, repo, hash, ext);
-  if (validationError) {
-    return jsonResponse({ error: 'invalid_request', error_description: validationError }, 400);
+  const payload = validateOfferPayload(body);
+  if (payload.error) {
+    return jsonResponse({ error: 'invalid_request', error_description: payload.error }, 400);
   }
+  const { owner, repo, hash, ext, uploadUrl, uploadHeaders, ttl } = payload;
 
   // The OIDC token proves which repository's workflow is calling; it must
   // match the coordinates it is offering an upload URL for.
@@ -114,49 +185,10 @@ export async function handleImageOffer(request, env, body) {
     }, 403);
   }
 
-  let uploadUrl;
-  try {
-    uploadUrl = new URL(upload_url);
-  } catch {
-    return jsonResponse({ error: 'invalid_request', error_description: 'upload_url is not a valid URL' }, 400);
-  }
-  if (uploadUrl.protocol !== 'https:' || !uploadUrl.hostname.endsWith(UPLOAD_HOST_SUFFIX)) {
-    return jsonResponse({
-      error: 'invalid_request',
-      error_description: `upload_url must be an https URL on *${UPLOAD_HOST_SUFFIX}`
-    }, 400);
-  }
-
-  const headers = {};
-  if (upload_headers !== undefined) {
-    if (typeof upload_headers !== 'object' || upload_headers === null || Array.isArray(upload_headers)) {
-      return jsonResponse({ error: 'invalid_request', error_description: 'upload_headers must be an object' }, 400);
-    }
-    const entries = Object.entries(upload_headers);
-    if (entries.length > MAX_UPLOAD_HEADERS) {
-      return jsonResponse({ error: 'invalid_request', error_description: 'Too many upload_headers' }, 400);
-    }
-    for (const [name, value] of entries) {
-      if (!/^[A-Za-z0-9-]+$/.test(name) || typeof value !== 'string') {
-        return jsonResponse({ error: 'invalid_request', error_description: `Invalid upload header: ${name}` }, 400);
-      }
-      headers[name.toLowerCase()] = value;
-    }
-  }
-
-  let ttl = DEFAULT_OFFER_TTL_S;
-  if (expires_in !== undefined) {
-    const parsed = Number(expires_in);
-    if (!Number.isFinite(parsed)) {
-      return jsonResponse({ error: 'invalid_request', error_description: 'expires_in must be a number' }, 400);
-    }
-    ttl = Math.min(Math.max(Math.floor(parsed), MIN_OFFER_TTL_S), MAX_OFFER_TTL_S);
-  }
-
   const key = objectKey(owner, repo, hash, ext);
   await env.IMAGE_OFFERS.put(`offer:${key}`, JSON.stringify({
-    upload_url,
-    upload_headers: headers,
+    upload_url: uploadUrl,
+    upload_headers: uploadHeaders,
     created_at: new Date().toISOString(),
     workflow_run_id: claims.run_id
   }), { expirationTtl: ttl });
@@ -180,10 +212,12 @@ export async function handleImageStatus(request, env) {
   const key = objectKey(owner, repo, hash, ext);
   const serveUrl = serveUrlFor(request, key);
 
-  // Already uploaded (content-addressed, so this is also the dedupe path)
+  // Already uploaded (content-addressed, so this is also the dedupe path).
+  // Only counts if the object would actually be served — same checksum rule
+  // as the serve path; a re-upload overwrites an unverifiable object.
   if (env.IMAGES) {
     const head = await env.IMAGES.head(key);
-    if (head) {
+    if (head && hasVerifiedChecksum(head, hash)) {
       return jsonResponse({ status: 'uploaded', serve_url: serveUrl });
     }
   }
@@ -207,6 +241,16 @@ export async function handleImageStatus(request, env) {
 
 function bufferToHex(buffer) {
   return [...new Uint8Array(buffer)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Content-addressed integrity: an object is only serveable when it carries
+// the SHA-256 checksum R2 recorded at upload time (bound into the pre-signed
+// PUT) and it matches the hash in the key. Objects without a checksum (e.g.
+// written out-of-band without ChecksumSHA256) are refused rather than served
+// unverified — the immutable-URL guarantee depends on this.
+function hasVerifiedChecksum(objectMeta, hash) {
+  const stored = objectMeta.checksums && objectMeta.checksums.sha256;
+  return Boolean(stored) && bufferToHex(stored) === hash;
 }
 
 function serveHeaders(object, ext) {
@@ -245,6 +289,9 @@ export async function handleImageServe(request, env) {
     if (!head) {
       return new Response(null, { status: 404 });
     }
+    if (!hasVerifiedChecksum(head, hash)) {
+      return new Response(null, { status: 409 });
+    }
     return new Response(null, { status: 200, headers: serveHeaders(head, ext) });
   }
 
@@ -253,13 +300,10 @@ export async function handleImageServe(request, env) {
     return jsonResponse({ error: 'not_found' }, 404);
   }
 
-  // Content-addressed integrity: the stored SHA-256 checksum (bound into the
-  // pre-signed PUT) must match the hash in the key, or we refuse to serve.
-  const storedChecksum = object.checksums && object.checksums.sha256;
-  if (storedChecksum && bufferToHex(storedChecksum) !== hash) {
+  if (!hasVerifiedChecksum(object, hash)) {
     return jsonResponse({
       error: 'checksum_mismatch',
-      error_description: 'Stored object does not match its content-addressed key'
+      error_description: 'Stored object does not carry a verified SHA-256 checksum matching its content-addressed key'
     }, 409);
   }
 

@@ -125,7 +125,9 @@ Offer payload:
 
 The Worker validates: hash format, extension allowlist (`png jpg jpeg gif webp
 svg avif mp4 mov webm`), `upload_url` host must be `*.r2.cloudflarestorage.com`,
-and OIDC `repository` claim == `owner/repo`.
+`upload_headers` must carry `x-amz-checksum-sha256` equal to the base64
+encoding of `hash` (the checksum binding is mandatory, not optional), and the
+OIDC `repository` claim must equal `owner/repo`.
 
 ## Storage layout & bindings
 
@@ -141,7 +143,7 @@ and OIDC `repository` claim == `owner/repo`.
 | Arbitrary users minting upload URLs | Only the target repo's workflow can register offers (OIDC `repository` claim), and only users with **write access** can dispatch `workflow_dispatch` — GitHub enforces this. |
 | Forged offers (attacker POSTs a malicious `upload_url`) | Offer endpoint requires a valid GitHub OIDC token for the exact repo; `upload_url` host is restricted to R2. |
 | Stolen upload URL (workflow inputs are visible to anyone with read access on public repos, so the poll coordinates are not secret) | The pre-signed URL has `x-amz-checksum-sha256` in its signed headers: it can **only** upload content matching the requested hash. Worst case, an attacker uploads the identical bytes the maintainer was about to upload. |
-| Content swap after publication | Keys are content-addressed; the serve path re-checks the stored R2 SHA-256 checksum against the hash in the key and refuses to serve mismatches. URLs are immutable. |
+| Content swap after publication | Keys are content-addressed; the serve path re-checks the stored R2 SHA-256 checksum against the hash in the key and refuses to serve mismatches — or objects with no stored checksum at all (e.g. written out-of-band without `ChecksumSHA256`). URLs are immutable. |
 | Credential blast radius | R2 credentials live only as Actions secrets in participating repos (mcpecrets pattern) and never reach the client or the Worker. Note: any repo holding the credentials can write any key in the shared bucket — use per-org buckets/credentials if org-level isolation matters. |
 | SVG script execution | Served with `X-Content-Type-Options: nosniff` and a restrictive `Content-Security-Policy` (and GitHub proxies embedded images through Camo anyway). |
 
