@@ -260,6 +260,9 @@ import webFlow from './worker-web.js';
 // Import image upload handlers (gh image)
 import { handleImageOffer, handleImageStatus, handleImageServe } from './image-upload.js';
 
+// Import GitHub App webhook handler (auto-installs the image-upload workflow)
+import { handleGitHubWebhook } from './app-install.js';
+
 // Main request handler
 export default {
   async fetch(request, env, ctx) {
@@ -280,6 +283,12 @@ export default {
       return handleImageStatus(request, env);
     }
 
+    // GitHub App webhook (handled before generic body parsing because the
+    // signature check needs the raw request body)
+    if (url.pathname === '/webhook' && request.method === 'POST') {
+      return handleGitHubWebhook(request, env, ctx);
+    }
+
     // Allow GET for health check
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
       return new Response(JSON.stringify({
@@ -292,9 +301,10 @@ export default {
           '/auth/start': 'Start web flow (POST)',
           '/auth/callback': 'OAuth callback (GET)',
           '/auth/poll': 'Poll web flow (POST)',
-          '/image-upload/offer': 'Register pre-signed upload URL from workflow (POST, OIDC)',
+          '/image-upload/offer': 'Request pre-signed upload URL from workflow (POST, OIDC)',
           '/image-upload/status': 'Poll for pre-signed upload URL (GET)',
-          '/i/{owner}/{repo}/{hash}.{ext}': 'Serve uploaded image/video (GET)'
+          '/i/{owner}/{repo}/{hash}.{ext}': 'Serve uploaded image/video (GET)',
+          '/webhook': 'GitHub App webhook: auto-install image-upload workflow (POST)'
         }
       }), {
         status: 200,

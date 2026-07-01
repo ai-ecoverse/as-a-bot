@@ -1,23 +1,17 @@
+# NOTE: kept in sync with workflow-template.js (the copy the app auto-installs).
 # Image upload broker for `gh image` (ai-aligned-gh).
 #
-# Copy this file to .github/workflows/image-upload.yml in any repository that
-# should support `gh image <file>`. See docs/image-upload-design.md in
-# https://github.com/ai-ecoverse/as-a-bot for the full design.
-#
-# Required Actions secrets (repo- or org-level):
-#   R2_ACCOUNT_ID         Cloudflare account ID
-#   R2_ACCESS_KEY_ID      R2 API token key (object write on the bucket)
-#   R2_SECRET_ACCESS_KEY  R2 API token secret
-# Optional Actions variables:
-#   R2_BUCKET             Bucket name (default: as-a-bot-images)
-#   AS_A_BOT_URL          Worker base URL (default: https://as-bot-worker.minivelos.workers.dev)
+# Installed automatically by the as-a-bot GitHub App
+# (https://github.com/ai-ecoverse/as-a-bot). No secrets required: the
+# workflow only proves repository identity to the as-a-bot worker via
+# GitHub OIDC; the worker mints the pre-signed upload URL itself.
 #
 # Only users with write access can dispatch this workflow — that is the
 # entire authorization model: minting an upload URL requires the same
 # permission as pushing code.
 
 name: Image Upload
-run-name: "Pre-sign image upload ${{ inputs.hash }}.${{ inputs.ext }}"
+run-name: "Request image upload URL ${{ inputs.hash }}.${{ inputs.ext }}"
 
 on:
   workflow_dispatch:
@@ -32,123 +26,35 @@ on:
         type: string
 
 permissions:
-  id-token: write   # OIDC token authenticates the offer to the as-a-bot worker
+  id-token: write   # OIDC token authenticates this repo to the as-a-bot worker
   contents: read
 
 jobs:
-  presign:
+  request-upload-url:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install dependencies
-        run: npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
-
-      - name: Pre-sign upload URL and register it with the worker
+      - name: Request pre-signed upload URL from as-a-bot
         env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ vars.R2_BUCKET || 'as-a-bot-images' }}
           AS_A_BOT_URL: ${{ vars.AS_A_BOT_URL || 'https://as-bot-worker.minivelos.workers.dev' }}
           INPUT_HASH: ${{ inputs.hash }}
           INPUT_EXT: ${{ inputs.ext }}
         run: |
-          node << 'SCRIPT'
-          const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
-          const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+          set -euo pipefail
 
-          const ALLOWED_EXT = ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "mp4", "mov", "webm"];
-          const OIDC_AUDIENCE = "as-a-bot-images";
-          const EXPIRES_IN = 900; // seconds
+          echo "$INPUT_HASH" | grep -qE '^[a-f0-9]{64}$' || { echo "Invalid hash input"; exit 1; }
+          echo "$INPUT_EXT" | grep -qE '^(png|jpg|jpeg|gif|webp|svg|avif|mp4|mov|webm)$' || { echo "Invalid ext input"; exit 1; }
 
-          async function main() {
-            const hash = (process.env.INPUT_HASH || "").toLowerCase();
-            const ext = (process.env.INPUT_EXT || "").toLowerCase();
+          OIDC_TOKEN=$(curl -sSf \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=as-a-bot-images" | jq -r .value)
 
-            if (!/^[a-f0-9]{64}$/.test(hash)) {
-              throw new Error("Invalid hash input (expected 64 hex chars)");
-            }
-            if (!ALLOWED_EXT.includes(ext)) {
-              throw new Error(`Invalid ext input (allowed: ${ALLOWED_EXT.join(", ")})`);
-            }
-            for (const name of ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]) {
-              if (!process.env[name]) {
-                throw new Error(`Missing required secret: ${name}`);
-              }
-            }
+          # The worker responds with only the serve URL — the pre-signed
+          # upload URL stays out of the (publicly readable) run logs and is
+          # delivered to the gh image client via the worker's status endpoint.
+          RESPONSE=$(curl -sSf -X POST "$AS_A_BOT_URL/image-upload/offer" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"hash\":\"$INPUT_HASH\",\"ext\":\"$INPUT_EXT\"}")
 
-            const [owner, repo] = process.env.GITHUB_REPOSITORY.split("/");
-            const key = `${owner}/${repo}/${hash}.${ext}`;
-            // Binding the checksum into the signature means this URL can ONLY
-            // upload content whose SHA-256 matches the requested hash — a
-            // leaked or stolen URL cannot place different content at this key.
-            const checksumB64 = Buffer.from(hash, "hex").toString("base64");
-
-            const client = new S3Client({
-              region: "auto",
-              endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-              credentials: {
-                accessKeyId: process.env.R2_ACCESS_KEY_ID,
-                secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-              },
-              // R2 does not support the SDK's newer implicit CRC checksums
-              requestChecksumCalculation: "WHEN_REQUIRED",
-            });
-
-            const command = new PutObjectCommand({
-              Bucket: process.env.R2_BUCKET,
-              Key: key,
-              ChecksumSHA256: checksumB64,
-            });
-            const uploadUrl = await getSignedUrl(client, command, {
-              expiresIn: EXPIRES_IN,
-              // Keep the checksum as a header the uploader must send (signed),
-              // instead of hoisting it into the query string.
-              unhoistableHeaders: new Set(["x-amz-checksum-sha256"]),
-            });
-
-            // Prove our identity (repository) to the worker via GitHub OIDC
-            const tokenRes = await fetch(
-              `${process.env.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${encodeURIComponent(OIDC_AUDIENCE)}`,
-              { headers: { Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` } }
-            );
-            if (!tokenRes.ok) {
-              throw new Error(`Failed to obtain OIDC token (status ${tokenRes.status})`);
-            }
-            const { value: oidcToken } = await tokenRes.json();
-
-            const offerRes = await fetch(`${process.env.AS_A_BOT_URL}/image-upload/offer`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${oidcToken}`,
-              },
-              body: JSON.stringify({
-                owner,
-                repo,
-                hash,
-                ext,
-                upload_url: uploadUrl,
-                upload_headers: { "x-amz-checksum-sha256": checksumB64 },
-                expires_in: EXPIRES_IN,
-              }),
-            });
-            if (!offerRes.ok) {
-              const detail = await offerRes.text();
-              throw new Error(`Worker rejected the offer (status ${offerRes.status}): ${detail}`);
-            }
-            const { serve_url } = await offerRes.json();
-            // Never log uploadUrl — it is a bearer capability until it expires
-            console.log(`Upload offer registered for ${key}`);
-            console.log(`Will be served at: ${serve_url}`);
-          }
-
-          main().catch((err) => {
-            console.error(err.message);
-            process.exit(1);
-          });
-          SCRIPT
+          echo "Upload URL registered. File will be served at:"
+          echo "$RESPONSE" | jq -r .serve_url

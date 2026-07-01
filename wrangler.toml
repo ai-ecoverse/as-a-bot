@@ -32,9 +32,14 @@ bucket_name = "as-a-bot-images"
 GITHUB_API = "https://api.github.com"
 ALLOWED_ORIGINS = ""
 IMAGE_OIDC_AUDIENCE = "as-a-bot-images"
+R2_ACCOUNT_ID = "155ec15a52a18a14801e04b019da5e5a"
+R2_BUCKET = "as-a-bot-images"
 
 # Secrets (configure with wrangler secret put)
 # GITHUB_APP_PRIVATE_KEY - PEM format private key
 # GITHUB_APP_ID - Numeric App ID
 # GITHUB_CLIENT_ID - App Client ID
+# GITHUB_WEBHOOK_SECRET - App webhook secret (for /webhook)
+# R2_ACCESS_KEY_ID - R2 S3 credential for pre-signing upload URLs
+# R2_SECRET_ACCESS_KEY - R2 S3 credential for pre-signing upload URLs
 # CLOUDFLARE_TOKEN - For GitHub Actions deployment

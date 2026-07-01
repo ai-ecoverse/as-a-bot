@@ -122,10 +122,13 @@ curl -X POST https://api.github.com/repos/OWNER/REPO/issues \
 `gh` cannot attach images to PRs or issues ([cli/cli#12960](https://github.com/cli/cli/issues/12960)),
 which is a real limitation for coding agents. This worker doubles as an upload
 broker for the `gh image` command in
-[ai-aligned-gh](https://github.com/ai-ecoverse/ai-aligned-gh): a GitHub Actions
-workflow in the target repo (dispatchable only by users with write access)
-pre-signs a checksum-bound R2 PUT URL and registers it here; `gh image` polls
-for it, uploads the file, and gets back a stable serve URL.
+[ai-aligned-gh](https://github.com/ai-ecoverse/ai-aligned-gh): a secret-free
+GitHub Actions workflow in the target repo (dispatchable only by users with
+write access, and **committed automatically when the app is installed**)
+proves repository identity via OIDC; the worker mints a checksum-bound
+pre-signed R2 PUT URL; `gh image` polls for it, uploads the file, and gets
+back a stable serve URL. Uploads are kept for 90 days — re-running
+`gh image` on the same file renews the same URL.
 
 See **[docs/image-upload-design.md](docs/image-upload-design.md)** for the full
 design and trust model.
@@ -133,24 +136,31 @@ design and trust model.
 ### Endpoints
 
 ```bash
-POST /image-upload/offer     # workflow registers a pre-signed URL (GitHub OIDC auth)
+POST /webhook                # app installation events: auto-install the workflow
+POST /image-upload/offer     # workflow requests a pre-signed URL (GitHub OIDC auth)
 GET  /image-upload/status    # gh image polls: ?owner=&repo=&hash=&ext=
-GET  /i/{owner}/{repo}/{hash}.{ext}   # serve the uploaded file (immutable)
+GET  /i/{owner}/{repo}/{hash}.{ext}   # serve the uploaded file (immutable, 90-day TTL)
 ```
 
 ### Repo setup
 
-1. Copy [`templates/image-upload.yml`](templates/image-upload.yml) to
-   `.github/workflows/image-upload.yml` in your repository.
-2. Add Actions secrets: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
-   `R2_SECRET_ACCESS_KEY` (an R2 API token with object write on the bucket).
+Install the [as-a-bot app](https://github.com/apps/as-a-bot) on the repository.
+The workflow is committed automatically; no secrets or variables are needed.
 
 ### Worker setup
 
 ```bash
 wrangler r2 bucket create as-a-bot-images
+wrangler r2 bucket lifecycle add as-a-bot-images --name expire-uploads --expire-days 90
+wrangler secret put R2_ACCESS_KEY_ID       # R2 S3 credential (pre-signing only)
+wrangler secret put R2_SECRET_ACCESS_KEY
+wrangler secret put GITHUB_WEBHOOK_SECRET  # app webhook secret for /webhook
 wrangler deploy
 ```
+
+The GitHub App needs its webhook pointed at `/webhook`, the **Installation**
+event subscription, and **Contents + Workflows (Read & write)** repository
+permissions for the auto-install.
 
 ## ⚙️ Configuration
 
@@ -159,6 +169,9 @@ wrangler deploy
 | `GITHUB_CLIENT_ID` | GitHub App Client ID | Yes |
 | `GITHUB_API` | GitHub API URL (default: https://api.github.com) | No |
 | `IMAGE_OIDC_AUDIENCE` | OIDC audience for image upload offers (default: as-a-bot-images) | No |
+| `R2_ACCOUNT_ID` / `R2_BUCKET` | R2 coordinates for image uploads | For gh image |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 credentials (secret; pre-signing only) | For gh image |
+| `GITHUB_WEBHOOK_SECRET` | App webhook secret (secret; for /webhook) | For auto-install |
 
 ## 🏗️ Architecture
 

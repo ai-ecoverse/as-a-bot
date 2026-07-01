@@ -4,18 +4,26 @@
  * Flow (see docs/image-upload-design.md):
  *  1. A maintainer runs `gh image <file>`, which dispatches the repo's
  *     image-upload workflow with the file's SHA-256 hash and extension.
- *  2. The workflow pre-signs a checksum-bound R2 PUT URL and registers it
- *     here via POST /image-upload/offer, authenticated with a GitHub
- *     Actions OIDC token whose `repository` claim must match the offer.
+ *     The workflow is committed automatically when the as-a-bot app is
+ *     installed (see app-install.js) and holds no secrets.
+ *  2. The workflow calls POST /image-upload/offer with just {hash, ext},
+ *     authenticated by a GitHub Actions OIDC token. The worker derives
+ *     owner/repo from the token's `repository` claim and mints a
+ *     checksum-bound pre-signed R2 PUT URL itself (r2-presign.js) using
+ *     R2 credentials that live only as Worker secrets.
  *  3. The client polls GET /image-upload/status until the offer appears,
  *     uploads the file to the pre-signed URL, and embeds the serve URL.
  *  4. GET/HEAD /i/{owner}/{repo}/{hash}.{ext} serves the object from R2
- *     with immutable caching.
+ *     with immutable caching. Uploads expire after 90 days; re-uploading
+ *     the same file renews them at the same URL.
  *
  * Bindings: IMAGE_OFFERS (KV, transient offers), IMAGES (R2 bucket).
+ * Secrets: R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.
+ * Vars: R2_ACCOUNT_ID, R2_BUCKET, IMAGE_OIDC_AUDIENCE.
  */
 
 import { verifyGitHubActionsToken } from './github-oidc.js';
+import { presignR2ImagePut } from './r2-presign.js';
 
 export const IMAGE_CONTENT_TYPES = {
   png: 'image/png',
@@ -34,13 +42,13 @@ const DEFAULT_OIDC_AUDIENCE = 'as-a-bot-images';
 const NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const SERVE_PATH_PATTERN = /^\/i\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/([a-f0-9]{64})\.([a-z0-9]+)$/;
-// Pre-signed URLs must point at R2's S3 endpoint — never accept an
-// arbitrary upload destination from the workflow.
-const UPLOAD_HOST_SUFFIX = '.r2.cloudflarestorage.com';
 const DEFAULT_OFFER_TTL_S = 900;
 const MIN_OFFER_TTL_S = 60; // KV minimum expirationTtl
 const MAX_OFFER_TTL_S = 3600;
-const MAX_UPLOAD_HEADERS = 8;
+// Uploads are kept for 90 days. Enforced here at serve time (expired
+// objects are refused and deleted); pair with an R2 lifecycle rule on the
+// bucket so storage is reclaimed even if an object is never requested.
+export const UPLOAD_TTL_S = 90 * 24 * 60 * 60;
 
 function jsonResponse(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -60,6 +68,10 @@ function validateCoordinates(owner, repo, hash, ext) {
   if (!repo || !NAME_PATTERN.test(repo)) {
     return 'Invalid or missing repo';
   }
+  return validateHashExt(hash, ext);
+}
+
+function validateHashExt(hash, ext) {
   if (!hash || !HASH_PATTERN.test(hash)) {
     return 'Invalid or missing hash (expected 64 lowercase hex chars)';
   }
@@ -86,8 +98,8 @@ function hexToBase64(hex) {
 }
 
 /**
- * Validate an offer payload. Returns { error } on failure, or the validated
- * { owner, repo, hash, ext, uploadUrl, uploadHeaders, ttl } on success.
+ * Validate an offer payload ({hash, ext, expires_in?}). Returns { error }
+ * on failure, or the validated { hash, ext, ttl } on success.
  * Exported for tests.
  */
 export function validateOfferPayload(body) {
@@ -95,46 +107,11 @@ export function validateOfferPayload(body) {
     return { error: 'Request body must be a JSON object' };
   }
 
-  const { owner, repo, hash, ext, upload_url, upload_headers, expires_in } = body;
+  const { hash, ext, expires_in } = body;
 
-  const coordError = validateCoordinates(owner, repo, hash, ext);
-  if (coordError) {
-    return { error: coordError };
-  }
-
-  let parsedUrl;
-  try {
-    parsedUrl = new URL(upload_url);
-  } catch {
-    return { error: 'upload_url is not a valid URL' };
-  }
-  if (parsedUrl.protocol !== 'https:' || !parsedUrl.hostname.endsWith(UPLOAD_HOST_SUFFIX)) {
-    return { error: `upload_url must be an https URL on *${UPLOAD_HOST_SUFFIX}` };
-  }
-
-  if (typeof upload_headers !== 'object' || upload_headers === null || Array.isArray(upload_headers)) {
-    return { error: 'upload_headers must be an object' };
-  }
-  const entries = Object.entries(upload_headers);
-  if (entries.length > MAX_UPLOAD_HEADERS) {
-    return { error: 'Too many upload_headers' };
-  }
-  const uploadHeaders = {};
-  for (const [name, value] of entries) {
-    if (!/^[A-Za-z0-9-]+$/.test(name) || typeof value !== 'string') {
-      return { error: `Invalid upload header: ${name}` };
-    }
-    uploadHeaders[name.toLowerCase()] = value;
-  }
-
-  // The security model requires every pre-signed URL to be bound to the
-  // offered content hash: the uploader must send x-amz-checksum-sha256 with
-  // exactly this value, and (because x-amz-* headers must be signed) an URL
-  // that was not signed for it will be rejected by R2. Refuse offers that
-  // don't carry the binding.
-  const expectedChecksum = hexToBase64(hash);
-  if (uploadHeaders['x-amz-checksum-sha256'] !== expectedChecksum) {
-    return { error: 'upload_headers must include x-amz-checksum-sha256 set to the base64 encoding of hash' };
+  const hashExtError = validateHashExt(hash, ext);
+  if (hashExtError) {
+    return { error: hashExtError };
   }
 
   let ttl = DEFAULT_OFFER_TTL_S;
@@ -146,13 +123,16 @@ export function validateOfferPayload(body) {
     ttl = Math.min(Math.max(Math.floor(parsed), MIN_OFFER_TTL_S), MAX_OFFER_TTL_S);
   }
 
-  return { owner, repo, hash, ext, uploadUrl: upload_url, uploadHeaders, ttl };
+  return { hash, ext, ttl };
 }
 
 // Handle POST /image-upload/offer (called by the image-upload workflow)
 export async function handleImageOffer(request, env, body) {
   if (!env.IMAGE_OFFERS) {
     return jsonResponse({ error: 'Image upload not configured (IMAGE_OFFERS KV missing)' }, 503);
+  }
+  if (!env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_ACCOUNT_ID || !env.R2_BUCKET) {
+    return jsonResponse({ error: 'Image upload not configured (R2 credentials missing)' }, 503);
   }
 
   const authHeader = request.headers.get('Authorization') || '';
@@ -174,26 +154,62 @@ export async function handleImageOffer(request, env, body) {
   if (payload.error) {
     return jsonResponse({ error: 'invalid_request', error_description: payload.error }, 400);
   }
-  const { owner, repo, hash, ext, uploadUrl, uploadHeaders, ttl } = payload;
+  const { hash, ext, ttl } = payload;
 
-  // The OIDC token proves which repository's workflow is calling; it must
-  // match the coordinates it is offering an upload URL for.
-  if ((claims.repository || '').toLowerCase() !== `${owner}/${repo}`.toLowerCase()) {
+  // The OIDC token is the sole source of truth for which repository is
+  // asking — coordinates cannot be spoofed by the request body.
+  const repository = claims.repository || '';
+  const [owner, repo] = repository.split('/');
+  const coordError = validateCoordinates(owner, repo, hash, ext);
+  if (coordError) {
     return jsonResponse({
-      error: 'repository_mismatch',
-      error_description: `OIDC token was issued for '${claims.repository}', not '${owner}/${repo}'`
+      error: 'invalid_repository_claim',
+      error_description: `OIDC repository claim '${repository}' is not usable: ${coordError}`
     }, 403);
   }
 
+  // Mint the pre-signed PUT URL. The checksum is part of the signature, so
+  // this URL can only ever upload content whose SHA-256 matches `hash`.
   const key = objectKey(owner, repo, hash, ext);
+  const checksumB64 = hexToBase64(hash);
+  const uploadUrl = await presignR2ImagePut(env, key, checksumB64, ttl);
+
   await env.IMAGE_OFFERS.put(`offer:${key}`, JSON.stringify({
     upload_url: uploadUrl,
-    upload_headers: uploadHeaders,
+    upload_headers: { 'x-amz-checksum-sha256': checksumB64 },
     created_at: new Date().toISOString(),
     workflow_run_id: claims.run_id
   }), { expirationTtl: ttl });
 
+  // Only the serve URL goes back to the workflow: the workflow's run logs
+  // are readable by anyone with repo read access, so the pre-signed URL
+  // must never appear there. The client fetches it from /image-upload/status.
   return jsonResponse({ status: 'ready', serve_url: serveUrlFor(request, key) }, 201);
+}
+
+function bufferToHex(buffer) {
+  return [...new Uint8Array(buffer)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Content-addressed integrity: an object is only serveable when it carries
+// the SHA-256 checksum R2 recorded at upload time (bound into the pre-signed
+// PUT) and it matches the hash in the key. Objects without a checksum (e.g.
+// written out-of-band without ChecksumSHA256) are refused rather than served
+// unverified — the immutable-URL guarantee depends on this.
+function hasVerifiedChecksum(objectMeta, hash) {
+  const stored = objectMeta.checksums && objectMeta.checksums.sha256;
+  return Boolean(stored) && bufferToHex(stored) === hash;
+}
+
+function objectAgeSeconds(objectMeta) {
+  if (!objectMeta.uploaded) {
+    return 0;
+  }
+  return (Date.now() - new Date(objectMeta.uploaded).getTime()) / 1000;
+}
+
+function isExpired(objectMeta) {
+  return objectAgeSeconds(objectMeta) > UPLOAD_TTL_S;
 }
 
 // Handle GET /image-upload/status?owner=&repo=&hash=&ext= (polled by gh image)
@@ -213,11 +229,11 @@ export async function handleImageStatus(request, env) {
   const serveUrl = serveUrlFor(request, key);
 
   // Already uploaded (content-addressed, so this is also the dedupe path).
-  // Only counts if the object would actually be served — same checksum rule
-  // as the serve path; a re-upload overwrites an unverifiable object.
+  // Only counts if the object would actually be served — same checksum and
+  // expiry rules as the serve path; a re-upload overwrites and renews it.
   if (env.IMAGES) {
     const head = await env.IMAGES.head(key);
-    if (head && hasVerifiedChecksum(head, hash)) {
+    if (head && hasVerifiedChecksum(head, hash) && !isExpired(head)) {
       return jsonResponse({ status: 'uploaded', serve_url: serveUrl });
     }
   }
@@ -239,25 +255,14 @@ export async function handleImageStatus(request, env) {
   return jsonResponse({ status: 'pending' }, 202);
 }
 
-function bufferToHex(buffer) {
-  return [...new Uint8Array(buffer)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-// Content-addressed integrity: an object is only serveable when it carries
-// the SHA-256 checksum R2 recorded at upload time (bound into the pre-signed
-// PUT) and it matches the hash in the key. Objects without a checksum (e.g.
-// written out-of-band without ChecksumSHA256) are refused rather than served
-// unverified — the immutable-URL guarantee depends on this.
-function hasVerifiedChecksum(objectMeta, hash) {
-  const stored = objectMeta.checksums && objectMeta.checksums.sha256;
-  return Boolean(stored) && bufferToHex(stored) === hash;
-}
-
 function serveHeaders(object, ext) {
+  // Objects are immutable but expire: cap the cache lifetime at whatever
+  // is left of the object's 90 days.
+  const remaining = Math.max(0, Math.floor(UPLOAD_TTL_S - objectAgeSeconds(object)));
   const headers = {
     'Content-Type': IMAGE_CONTENT_TYPES[ext] || 'application/octet-stream',
     'Content-Length': String(object.size),
-    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Cache-Control': `public, max-age=${remaining}, immutable`,
     // Defense against active content (mainly SVG): never sniff, never execute
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'"
@@ -289,6 +294,10 @@ export async function handleImageServe(request, env) {
     if (!head) {
       return new Response(null, { status: 404 });
     }
+    if (isExpired(head)) {
+      await env.IMAGES.delete(key);
+      return new Response(null, { status: 410 });
+    }
     if (!hasVerifiedChecksum(head, hash)) {
       return new Response(null, { status: 409 });
     }
@@ -298,6 +307,14 @@ export async function handleImageServe(request, env) {
   const object = await env.IMAGES.get(key);
   if (!object) {
     return jsonResponse({ error: 'not_found' }, 404);
+  }
+
+  if (isExpired(object)) {
+    await env.IMAGES.delete(key);
+    return jsonResponse({
+      error: 'expired',
+      error_description: `Uploads are kept for ${UPLOAD_TTL_S / 86400} days; re-run gh image to renew this file at the same URL`
+    }, 410);
   }
 
   if (!hasVerifiedChecksum(object, hash)) {

@@ -1,12 +1,20 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { handleImageOffer, handleImageStatus, handleImageServe, validateOfferPayload, IMAGE_CONTENT_TYPES } from './image-upload.js';
+import {
+  handleImageOffer,
+  handleImageStatus,
+  handleImageServe,
+  validateOfferPayload,
+  IMAGE_CONTENT_TYPES,
+  UPLOAD_TTL_S
+} from './image-upload.js';
 
 // Node 18+ provides Request/Response/Headers/URL natively — no polyfills needed.
 
 const HASH = 'a'.repeat(64);
-const HASH_B64 = Buffer.from(HASH, 'hex').toString('base64');
+const NOW = Date.now();
+const EXPIRED_UPLOAD_DATE = new Date(NOW - (UPLOAD_TTL_S + 3600) * 1000);
 
 function makeKV(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -27,15 +35,22 @@ function makeKV(initial = {}) {
 function makeR2(objects = {}) {
   return {
     objects,
+    deleted: [],
     async head(key) {
       const obj = objects[key];
-      return obj ? { size: obj.size, httpEtag: obj.httpEtag, checksums: obj.checksums } : null;
+      return obj
+        ? { size: obj.size, httpEtag: obj.httpEtag, checksums: obj.checksums, uploaded: obj.uploaded }
+        : null;
     },
     async get(key) {
       const obj = objects[key];
       return obj
-        ? { body: obj.body, size: obj.size, httpEtag: obj.httpEtag, checksums: obj.checksums }
+        ? { body: obj.body, size: obj.size, httpEtag: obj.httpEtag, checksums: obj.checksums, uploaded: obj.uploaded }
         : null;
+    },
+    async delete(key) {
+      this.deleted.push(key);
+      delete objects[key];
     }
   };
 }
@@ -48,10 +63,17 @@ function hexToBuffer(hex) {
   return bytes.buffer;
 }
 
+const R2_ENV = {
+  R2_ACCOUNT_ID: 'acct123',
+  R2_BUCKET: 'as-a-bot-images',
+  R2_ACCESS_KEY_ID: 'key',
+  R2_SECRET_ACCESS_KEY: 'secret'
+};
+
 describe('handleImageOffer', () => {
   test('rejects requests without a Bearer token', async () => {
     const request = new Request('https://worker.example/image-upload/offer', { method: 'POST' });
-    const response = await handleImageOffer(request, { IMAGE_OFFERS: makeKV() }, {});
+    const response = await handleImageOffer(request, { IMAGE_OFFERS: makeKV(), ...R2_ENV }, {});
     assert.equal(response.status, 401);
     const body = await response.json();
     assert.equal(body.error, 'unauthorized');
@@ -62,7 +84,7 @@ describe('handleImageOffer', () => {
       method: 'POST',
       headers: { Authorization: 'Bearer not-a-jwt' }
     });
-    const response = await handleImageOffer(request, { IMAGE_OFFERS: makeKV() }, {});
+    const response = await handleImageOffer(request, { IMAGE_OFFERS: makeKV(), ...R2_ENV }, {});
     assert.equal(response.status, 401);
     const body = await response.json();
     assert.equal(body.error, 'invalid_oidc_token');
@@ -70,8 +92,44 @@ describe('handleImageOffer', () => {
 
   test('returns 503 when the KV binding is missing', async () => {
     const request = new Request('https://worker.example/image-upload/offer', { method: 'POST' });
-    const response = await handleImageOffer(request, {}, {});
+    const response = await handleImageOffer(request, { ...R2_ENV }, {});
     assert.equal(response.status, 503);
+  });
+
+  test('returns 503 when R2 credentials are missing', async () => {
+    const request = new Request('https://worker.example/image-upload/offer', { method: 'POST' });
+    const response = await handleImageOffer(request, { IMAGE_OFFERS: makeKV() }, {});
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.match(body.error, /R2 credentials/);
+  });
+});
+
+describe('validateOfferPayload', () => {
+  test('accepts a valid payload', () => {
+    const result = validateOfferPayload({ hash: HASH, ext: 'png', expires_in: 900 });
+    assert.equal(result.error, undefined);
+    assert.equal(result.hash, HASH);
+    assert.equal(result.ext, 'png');
+    assert.equal(result.ttl, 900);
+  });
+
+  test('rejects non-object bodies', () => {
+    assert.ok(validateOfferPayload(null).error);
+    assert.ok(validateOfferPayload([]).error);
+    assert.ok(validateOfferPayload('str').error);
+  });
+
+  test('rejects bad hashes and extensions', () => {
+    assert.match(validateOfferPayload({ hash: 'short', ext: 'png' }).error, /hash/);
+    assert.match(validateOfferPayload({ hash: HASH.toUpperCase(), ext: 'png' }).error, /hash/);
+    assert.match(validateOfferPayload({ hash: HASH, ext: 'exe' }).error, /ext/);
+  });
+
+  test('clamps expires_in into the allowed TTL range', () => {
+    assert.equal(validateOfferPayload({ hash: HASH, ext: 'png', expires_in: 5 }).ttl, 60);
+    assert.equal(validateOfferPayload({ hash: HASH, ext: 'png', expires_in: 99999 }).ttl, 3600);
+    assert.ok(validateOfferPayload({ hash: HASH, ext: 'png', expires_in: 'soon' }).error);
   });
 });
 
@@ -135,54 +193,19 @@ describe('handleImageStatus', () => {
     const body = await response.json();
     assert.equal(body.status, 'pending');
   });
-});
 
-describe('validateOfferPayload', () => {
-  const validPayload = () => ({
-    owner: 'octo',
-    repo: 'demo',
-    hash: HASH,
-    ext: 'png',
-    upload_url: `https://acc.r2.cloudflarestorage.com/bucket/octo/demo/${HASH}.png?sig=1`,
-    upload_headers: { 'x-amz-checksum-sha256': HASH_B64 },
-    expires_in: 900
-  });
-
-  test('accepts a valid payload', () => {
-    const result = validateOfferPayload(validPayload());
-    assert.equal(result.error, undefined);
-    assert.equal(result.owner, 'octo');
-    assert.equal(result.ttl, 900);
-    assert.equal(result.uploadHeaders['x-amz-checksum-sha256'], HASH_B64);
-  });
-
-  test('rejects non-object bodies', () => {
-    assert.ok(validateOfferPayload(null).error);
-    assert.ok(validateOfferPayload([]).error);
-    assert.ok(validateOfferPayload('str').error);
-  });
-
-  test('rejects upload URLs outside R2', () => {
-    const payload = { ...validPayload(), upload_url: 'https://evil.example/steal' };
-    assert.match(validateOfferPayload(payload).error, /upload_url/);
-  });
-
-  test('rejects offers without the checksum binding header', () => {
-    const payload = { ...validPayload(), upload_headers: {} };
-    assert.match(validateOfferPayload(payload).error, /x-amz-checksum-sha256/);
-  });
-
-  test('rejects offers whose checksum header does not match the hash', () => {
-    const payload = {
-      ...validPayload(),
-      upload_headers: { 'x-amz-checksum-sha256': Buffer.from('b'.repeat(64), 'hex').toString('base64') }
-    };
-    assert.match(validateOfferPayload(payload).error, /x-amz-checksum-sha256/);
-  });
-
-  test('clamps expires_in into the allowed TTL range', () => {
-    assert.equal(validateOfferPayload({ ...validPayload(), expires_in: 5 }).ttl, 60);
-    assert.equal(validateOfferPayload({ ...validPayload(), expires_in: 99999 }).ttl, 3600);
+  test('does not report uploaded for expired objects', async () => {
+    const r2 = makeR2({
+      [`octo/demo/${HASH}.png`]: {
+        size: 3,
+        body: 'abc',
+        checksums: { sha256: hexToBuffer(HASH) },
+        uploaded: EXPIRED_UPLOAD_DATE
+      }
+    });
+    const request = new Request(`${baseUrl}?${params}`);
+    const response = await handleImageStatus(request, { IMAGE_OFFERS: makeKV(), IMAGES: r2 });
+    assert.equal(response.status, 202);
   });
 });
 
@@ -200,19 +223,23 @@ describe('handleImageServe', () => {
     assert.equal(response.status, 404);
   });
 
-  test('serves objects with immutable caching and the right content type', async () => {
+  test('serves objects with capped immutable caching and the right content type', async () => {
     const r2 = makeR2({
       [`octo/demo/${HASH}.png`]: {
         body: 'imagebytes',
         size: 10,
         httpEtag: '"etag"',
-        checksums: { sha256: hexToBuffer(HASH) }
+        checksums: { sha256: hexToBuffer(HASH) },
+        uploaded: new Date(NOW - 3600 * 1000)
       }
     });
     const response = await handleImageServe(new Request(serveUrl), { IMAGES: r2 });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('Content-Type'), 'image/png');
-    assert.equal(response.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
+    const cacheControl = response.headers.get('Cache-Control');
+    assert.match(cacheControl, /^public, max-age=\d+, immutable$/);
+    const maxAge = Number(cacheControl.match(/max-age=(\d+)/)[1]);
+    assert.ok(maxAge <= UPLOAD_TTL_S - 3500, `max-age ${maxAge} should be capped below the remaining TTL`);
     assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
     assert.equal(await response.text(), 'imagebytes');
   });
@@ -241,6 +268,22 @@ describe('handleImageServe', () => {
     assert.equal(body.error, 'checksum_mismatch');
   });
 
+  test('deletes and refuses objects older than the 90-day TTL', async () => {
+    const r2 = makeR2({
+      [`octo/demo/${HASH}.png`]: {
+        body: 'old',
+        size: 3,
+        checksums: { sha256: hexToBuffer(HASH) },
+        uploaded: EXPIRED_UPLOAD_DATE
+      }
+    });
+    const response = await handleImageServe(new Request(serveUrl), { IMAGES: r2 });
+    assert.equal(response.status, 410);
+    const body = await response.json();
+    assert.equal(body.error, 'expired');
+    assert.deepEqual(r2.deleted, [`octo/demo/${HASH}.png`]);
+  });
+
   test('answers HEAD without a body', async () => {
     const r2 = makeR2({
       [`octo/demo/${HASH}.png`]: {
@@ -261,6 +304,20 @@ describe('handleImageServe', () => {
     });
     const response = await handleImageServe(new Request(serveUrl, { method: 'HEAD' }), { IMAGES: r2 });
     assert.equal(response.status, 409);
+  });
+
+  test('HEAD expires old objects', async () => {
+    const r2 = makeR2({
+      [`octo/demo/${HASH}.png`]: {
+        body: 'old',
+        size: 3,
+        checksums: { sha256: hexToBuffer(HASH) },
+        uploaded: EXPIRED_UPLOAD_DATE
+      }
+    });
+    const response = await handleImageServe(new Request(serveUrl, { method: 'HEAD' }), { IMAGES: r2 });
+    assert.equal(response.status, 410);
+    assert.deepEqual(r2.deleted, [`octo/demo/${HASH}.png`]);
   });
 
   test('HEAD 404s on missing objects', async () => {
