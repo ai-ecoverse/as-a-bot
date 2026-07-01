@@ -16,10 +16,22 @@ id = "4d16c1ca5973424990ae00ab7f5c6bf7"
 binding = "AUTH_STATES"
 id = "6fac9e3755f74be0b56d33da9d0942d9"
 
+# KV Namespace for pending image upload offers (gh image)
+[[kv_namespaces]]
+binding = "IMAGE_OFFERS"
+id = "5587c4066bef45e9b58440e90afcc738"
+
+# R2 bucket for uploaded images/videos (gh image)
+# Create before first deploy: wrangler r2 bucket create as-a-bot-images
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "as-a-bot-images"
+
 # Environment variables (non-sensitive)
 [vars]
 GITHUB_API = "https://api.github.com"
 ALLOWED_ORIGINS = ""
+IMAGE_OIDC_AUDIENCE = "as-a-bot-images"
 
 # Secrets (configure with wrangler secret put)
 # GITHUB_APP_PRIVATE_KEY - PEM format private key

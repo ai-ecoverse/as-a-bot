@@ -117,12 +117,48 @@ curl -X POST https://api.github.com/repos/OWNER/REPO/issues \
 
 **Expected**: Issue shows your username + app badge, NOT "app/as-a-bot"
 
+## 🖼️ Image Uploads (`gh image`)
+
+`gh` cannot attach images to PRs or issues ([cli/cli#12960](https://github.com/cli/cli/issues/12960)),
+which is a real limitation for coding agents. This worker doubles as an upload
+broker for the `gh image` command in
+[ai-aligned-gh](https://github.com/ai-ecoverse/ai-aligned-gh): a GitHub Actions
+workflow in the target repo (dispatchable only by users with write access)
+pre-signs a checksum-bound R2 PUT URL and registers it here; `gh image` polls
+for it, uploads the file, and gets back a stable serve URL.
+
+See **[docs/image-upload-design.md](docs/image-upload-design.md)** for the full
+design and trust model.
+
+### Endpoints
+
+```bash
+POST /image-upload/offer     # workflow registers a pre-signed URL (GitHub OIDC auth)
+GET  /image-upload/status    # gh image polls: ?owner=&repo=&hash=&ext=
+GET  /i/{owner}/{repo}/{hash}.{ext}   # serve the uploaded file (immutable)
+```
+
+### Repo setup
+
+1. Copy [`templates/image-upload.yml`](templates/image-upload.yml) to
+   `.github/workflows/image-upload.yml` in your repository.
+2. Add Actions secrets: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+   `R2_SECRET_ACCESS_KEY` (an R2 API token with object write on the bucket).
+
+### Worker setup
+
+```bash
+wrangler r2 bucket create as-a-bot-images
+wrangler deploy
+```
+
 ## ⚙️ Configuration
 
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `GITHUB_CLIENT_ID` | GitHub App Client ID | Yes |
 | `GITHUB_API` | GitHub API URL (default: https://api.github.com) | No |
+| `IMAGE_OIDC_AUDIENCE` | OIDC audience for image upload offers (default: as-a-bot-images) | No |
 
 ## 🏗️ Architecture
 

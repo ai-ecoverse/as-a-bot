@@ -257,16 +257,29 @@ async function handleUserTokenPoll(request, env, body) {
 // Import web flow handlers
 import webFlow from './worker-web.js';
 
+// Import image upload handlers (gh image)
+import { handleImageOffer, handleImageStatus, handleImageServe } from './image-upload.js';
+
 // Main request handler
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    
+
     // Route web flow endpoints to web flow handler
     if (url.pathname.startsWith('/auth/')) {
       return webFlow.fetch(request, env, ctx);
     }
-    
+
+    // Serve uploaded images/videos from R2 (gh image)
+    if (url.pathname.startsWith('/i/') && (request.method === 'GET' || request.method === 'HEAD')) {
+      return handleImageServe(request, env);
+    }
+
+    // Poll endpoint for pending image uploads (gh image)
+    if (url.pathname === '/image-upload/status' && request.method === 'GET') {
+      return handleImageStatus(request, env);
+    }
+
     // Allow GET for health check
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
       return new Response(JSON.stringify({
@@ -278,7 +291,10 @@ export default {
           '/user-token/poll': 'Poll device flow (POST)',
           '/auth/start': 'Start web flow (POST)',
           '/auth/callback': 'OAuth callback (GET)',
-          '/auth/poll': 'Poll web flow (POST)'
+          '/auth/poll': 'Poll web flow (POST)',
+          '/image-upload/offer': 'Register pre-signed upload URL from workflow (POST, OIDC)',
+          '/image-upload/status': 'Poll for pre-signed upload URL (GET)',
+          '/i/{owner}/{repo}/{hash}.{ext}': 'Serve uploaded image/video (GET)'
         }
       }), {
         status: 200,
@@ -329,7 +345,11 @@ export default {
         case '/user-token/poll':
           response = await handleUserTokenPoll(request, env, body);
           break;
-        
+
+        case '/image-upload/offer':
+          response = await handleImageOffer(request, env, body);
+          break;
+
         default:
           response = new Response(JSON.stringify({
             error: 'Not found'
