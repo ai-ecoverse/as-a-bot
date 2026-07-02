@@ -226,8 +226,10 @@ wrangler r2 bucket lifecycle add as-a-bot-images --name expire-uploads --expire-
 
 Deployment itself is CI-driven (`.github/workflows/deploy.yml`): every push
 to `main` runs the tests, syncs `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` /
-`GITHUB_WEBHOOK_SECRET` from Actions secrets into Worker secrets, and runs
-`wrangler deploy` (authenticated by the `CLOUDFLARE_TOKEN` Actions secret).
+`GH_WEBHOOK_SECRET` from Actions secrets into Worker secrets (the last one
+lands as `GITHUB_WEBHOOK_SECRET` — Actions secret names may not start with
+`GITHUB_`), and runs `wrangler deploy` (authenticated by the
+`CLOUDFLARE_TOKEN` Actions secret).
 The bindings are declared in `wrangler.toml` (`IMAGES`, `IMAGE_OFFERS`) along
 with the `R2_ACCOUNT_ID` / `R2_BUCKET` / `IMAGE_OIDC_AUDIENCE` vars.
 

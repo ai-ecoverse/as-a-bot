@@ -4,7 +4,10 @@
 #   CLOUDFLARE_TOKEN       API token with Workers Scripts edit permission
 #   R2_ACCESS_KEY_ID       R2 S3 credential (pre-signing upload URLs)
 #   R2_SECRET_ACCESS_KEY   R2 S3 credential
-#   GITHUB_WEBHOOK_SECRET  App webhook secret (must match the GitHub App settings)
+#   GH_WEBHOOK_SECRET      App webhook secret (must match the GitHub App
+#                          settings; Actions secret names may not start with
+#                          GITHUB_, so it syncs to the worker secret
+#                          GITHUB_WEBHOOK_SECRET)
 #
 # Worker secrets are synced before each deploy, so rotating one is just
 # updating the Actions secret and re-running this workflow.
@@ -43,18 +46,21 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_TOKEN }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          GITHUB_WEBHOOK_SECRET: ${{ secrets.GITHUB_WEBHOOK_SECRET }}
+          WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
-          for name in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY GITHUB_WEBHOOK_SECRET; do
-            value="${!name}"
+          sync() {
+            local name="$1" value="$2"
             if [ -n "$value" ]; then
               printf '%s' "$value" | npx wrangler secret put "$name"
               echo "Synced secret: $name"
             else
               echo "Skipping unset secret: $name"
             fi
-          done
+          }
+          sync R2_ACCESS_KEY_ID "$R2_ACCESS_KEY_ID"
+          sync R2_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY"
+          sync GITHUB_WEBHOOK_SECRET "$WEBHOOK_SECRET"
 
       - name: Deploy
         env:

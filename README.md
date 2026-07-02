@@ -157,7 +157,7 @@ secrets** on this repo once:
 |----------------|---------|
 | `CLOUDFLARE_TOKEN` | API token with Workers Scripts edit (deploy) |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 credential (pre-signing only) |
-| `GITHUB_WEBHOOK_SECRET` | App webhook secret — same value as in the app settings |
+| `GH_WEBHOOK_SECRET` | App webhook secret — same value as in the app settings (synced to the `GITHUB_WEBHOOK_SECRET` worker secret; Actions secret names may not start with `GITHUB_`) |
 
 One-time infrastructure (already provisioned for the canonical deployment):
 
