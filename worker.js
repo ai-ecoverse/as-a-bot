@@ -355,7 +355,7 @@ async function handleUserTokenRefresh(request, env, body) {
 import webFlow from './worker-web.js';
 
 // Import image upload handlers (gh image)
-import { handleImageOffer, handleImageStatus, handleImageServe, coordinatesFromHost } from './image-upload.js';
+import { handleImageOffer, handleImageStatus, handleImageServe, isImageServeHost } from './image-upload.js';
 
 // Import GitHub App webhook handler (auto-installs the image-upload workflow)
 import { handleGitHubWebhook } from './app-install.js';
@@ -365,16 +365,28 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // The wildcard serve domain is fenced off from the API: hosts under
+    // IMAGE_SERVE_DOMAIN only ever serve images
+    // (repo--owner.<IMAGE_SERVE_DOMAIN>/<hash>.<ext>) — everything else
+    // there is 404, and API routes stay on the worker host.
+    if (isImageServeHost(url.hostname, env)) {
+      if (request.method === 'GET' || request.method === 'HEAD') {
+        return handleImageServe(request, env);
+      }
+      return new Response(JSON.stringify({ error: 'not_found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
     // Route web flow endpoints to web flow handler
     if (url.pathname.startsWith('/auth/')) {
       return webFlow.fetch(request, env, ctx);
     }
 
-    // Serve uploaded images/videos from R2 (gh image) — path-based on the
-    // worker host, or hostname-based on the wildcard serve domain
-    // (repo--owner.<IMAGE_SERVE_DOMAIN>/<hash>.<ext>)
-    if ((request.method === 'GET' || request.method === 'HEAD') &&
-        (url.pathname.startsWith('/i/') || coordinatesFromHost(url.hostname, env))) {
+    // Serve uploaded images/videos from R2 (gh image), path-based on the
+    // worker host
+    if (url.pathname.startsWith('/i/') && (request.method === 'GET' || request.method === 'HEAD')) {
       return handleImageServe(request, env);
     }
 

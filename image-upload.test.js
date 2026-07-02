@@ -7,6 +7,7 @@ import {
   handleImageServe,
   validateOfferPayload,
   coordinatesFromHost,
+  isImageServeHost,
   IMAGE_CONTENT_TYPES,
   UPLOAD_TTL_S
 } from './image-upload.js';
@@ -348,6 +349,23 @@ describe('wildcard serve domain', () => {
     assert.equal(coordinatesFromHost('no-separator.img.example.com', DOMAIN_ENV), null);
     assert.equal(coordinatesFromHost('a.b.img.example.com', DOMAIN_ENV), null);
     assert.equal(coordinatesFromHost('repo--owner.img.example.com', {}), null);
+  });
+
+  test('coordinatesFromHost rejects malformed hostname labels', () => {
+    assert.equal(coordinatesFromHost('repo_x--owner.img.example.com', DOMAIN_ENV), null);
+    assert.equal(coordinatesFromHost('-repo--owner.img.example.com', DOMAIN_ENV), null);
+    assert.equal(coordinatesFromHost('repo--owner-.img.example.com', DOMAIN_ENV), null);
+    const tooLong = `${'a'.repeat(70)}--owner.img.example.com`;
+    assert.equal(coordinatesFromHost(tooLong, DOMAIN_ENV), null);
+  });
+
+  test('isImageServeHost fences the whole serve domain', () => {
+    assert.equal(isImageServeHost('repo--owner.img.example.com', DOMAIN_ENV), true);
+    assert.equal(isImageServeHost('anything.img.example.com', DOMAIN_ENV), true);
+    assert.equal(isImageServeHost('img.example.com', DOMAIN_ENV), true);
+    assert.equal(isImageServeHost('worker.example.dev', DOMAIN_ENV), false);
+    assert.equal(isImageServeHost('evil-img.example.com', DOMAIN_ENV), false);
+    assert.equal(isImageServeHost('repo--owner.img.example.com', {}), false);
   });
 
   test('status returns wildcard serve URLs when the domain is configured', async () => {

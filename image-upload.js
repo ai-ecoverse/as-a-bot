@@ -93,6 +93,20 @@ function objectKey(owner, repo, hash, ext) {
 const HOST_LABEL_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
+ * True when the request hostname belongs to the configured serve domain
+ * (the apex or any subdomain). Used to fence the serve domain off from
+ * the API: hosts under it only ever serve images.
+ */
+export function isImageServeHost(hostname, env) {
+  const domain = (env.IMAGE_SERVE_DOMAIN || '').toLowerCase();
+  if (!domain) {
+    return false;
+  }
+  const host = (hostname || '').toLowerCase();
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+/**
  * Parse `repo--owner.<domain>` into coordinates. Owner names cannot
  * contain consecutive hyphens (GitHub rule), so the LAST `--` in the
  * label is always the separator even when the repo name contains `--`.
@@ -108,7 +122,9 @@ export function coordinatesFromHost(hostname, env) {
     return null;
   }
   const label = host.slice(0, -(domain.length + 1));
-  if (!label || label.includes('.')) {
+  // The label must be a single, well-formed DNS hostname label — this is
+  // derived from the Host header, so validate before splitting.
+  if (!label || label.includes('.') || !HOST_LABEL_PATTERN.test(label)) {
     return null;
   }
   const separator = label.lastIndexOf('--');
