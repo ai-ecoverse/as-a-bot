@@ -45,6 +45,11 @@ const HOMEPAGE_HTML = `<!DOCTYPE html>
     }
     h1 { font-size: 1.7rem; margin-bottom: .4rem; }
     h1 .tld { color: #8b949e; font-weight: 400; }
+    h2 { font-size: 1.1rem; margin-bottom: .8rem; }
+    ol.steps { margin: 0 0 1.6rem 1.2rem; }
+    ol.steps li { margin-bottom: .8rem; }
+    ol.steps pre { margin: .5rem 0 0 0; }
+    a { color: #58a6ff; }
     .tagline { color: #8b949e; margin-bottom: 1.6rem; }
     p { margin-bottom: 1rem; }
     pre {
@@ -88,8 +93,26 @@ const HOMEPAGE_HTML = `<!DOCTYPE html>
       to their SHA-256 content hash end to end, and served immutably from
       <code>&lt;repo&gt;--&lt;owner&gt;.agentbin.net</code> for 90 days.
     </p>
+    <h2>Get started</h2>
+    <ol class="steps">
+      <li>
+        Install the <a href="https://github.com/ai-ecoverse/ai-aligned-gh">ai-aligned-gh</a>
+        wrapper (it provides the <code>gh image</code> command):
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/ai-ecoverse/ai-aligned-gh/main/install.sh | sh</code></pre>
+      </li>
+      <li>
+        Install the <a href="https://github.com/apps/as-a-bot">as-a-bot GitHub App</a>
+        on your repositories — it commits the upload workflow automatically;
+        no secrets or other configuration needed.
+      </li>
+      <li>
+        Upload away:
+        <pre><code>gh image screenshot.png</code></pre>
+      </li>
+    </ol>
     <div class="links">
-      <a href="https://github.com/ai-ecoverse/as-a-bot">GitHub repo</a>
+      <a href="https://github.com/ai-ecoverse/as-a-bot">as-a-bot</a>
+      <a href="https://github.com/ai-ecoverse/ai-aligned-gh">ai-aligned-gh</a>
       <a href="https://github.com/apps/as-a-bot">Install the app</a>
       <a href="https://github.com/ai-ecoverse">ai-ecoverse org</a>
     </div>
