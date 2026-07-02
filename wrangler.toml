@@ -39,6 +39,7 @@ R2_BUCKET = "as-a-bot-images"
 # GITHUB_APP_PRIVATE_KEY - PEM format private key
 # GITHUB_APP_ID - Numeric App ID
 # GITHUB_CLIENT_ID - App Client ID
+# GITHUB_CLIENT_SECRET - App Client Secret (web flow + token refresh)
 # GITHUB_WEBHOOK_SECRET - App webhook secret (for /webhook)
 # R2_ACCESS_KEY_ID - R2 S3 credential for pre-signing upload URLs
 # R2_SECRET_ACCESS_KEY - R2 S3 credential for pre-signing upload URLs
