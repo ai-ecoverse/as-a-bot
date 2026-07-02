@@ -81,12 +81,52 @@ function validateHashExt(hash, ext) {
   return null;
 }
 
+// Keys are lowercased: GitHub owner/repo names are case-insensitively
+// unique, and the wildcard serve hostnames (DNS) are always lowercase.
 function objectKey(owner, repo, hash, ext) {
-  return `${owner}/${repo}/${hash}.${ext}`;
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}/${hash}.${ext}`;
 }
 
-function serveUrlFor(request, key) {
-  return `${new URL(request.url).origin}/i/${key}`;
+// A hostname label must be [a-z0-9-], no leading/trailing hyphen, <= 63
+// chars. GitHub owner names always qualify; repo names may not (dots,
+// underscores) — those repos fall back to path-based serve URLs.
+const HOST_LABEL_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * Parse `repo--owner.<domain>` into coordinates. Owner names cannot
+ * contain consecutive hyphens (GitHub rule), so the LAST `--` in the
+ * label is always the separator even when the repo name contains `--`.
+ * Returns { owner, repo } or null.
+ */
+export function coordinatesFromHost(hostname, env) {
+  const domain = (env.IMAGE_SERVE_DOMAIN || '').toLowerCase();
+  if (!domain) {
+    return null;
+  }
+  const host = (hostname || '').toLowerCase();
+  if (!host.endsWith(`.${domain}`)) {
+    return null;
+  }
+  const label = host.slice(0, -(domain.length + 1));
+  if (!label || label.includes('.')) {
+    return null;
+  }
+  const separator = label.lastIndexOf('--');
+  if (separator <= 0 || separator + 2 >= label.length) {
+    return null;
+  }
+  return { owner: label.slice(separator + 2), repo: label.slice(0, separator) };
+}
+
+function serveUrlFor(request, env, owner, repo, hash, ext) {
+  const domain = (env.IMAGE_SERVE_DOMAIN || '').toLowerCase();
+  if (domain) {
+    const label = `${repo.toLowerCase()}--${owner.toLowerCase()}`;
+    if (HOST_LABEL_PATTERN.test(label)) {
+      return `https://${label}.${domain}/${hash}.${ext}`;
+    }
+  }
+  return `${new URL(request.url).origin}/i/${objectKey(owner, repo, hash, ext)}`;
 }
 
 function hexToBase64(hex) {
@@ -184,7 +224,7 @@ export async function handleImageOffer(request, env, body) {
   // Only the serve URL goes back to the workflow: the workflow's run logs
   // are readable by anyone with repo read access, so the pre-signed URL
   // must never appear there. The client fetches it from /image-upload/status.
-  return jsonResponse({ status: 'ready', serve_url: serveUrlFor(request, key) }, 201);
+  return jsonResponse({ status: 'ready', serve_url: serveUrlFor(request, env, owner, repo, hash, ext) }, 201);
 }
 
 function bufferToHex(buffer) {
@@ -226,7 +266,7 @@ export async function handleImageStatus(request, env) {
   }
 
   const key = objectKey(owner, repo, hash, ext);
-  const serveUrl = serveUrlFor(request, key);
+  const serveUrl = serveUrlFor(request, env, owner, repo, hash, ext);
 
   // Already uploaded (content-addressed, so this is also the dedupe path).
   // Only counts if the object would actually be served — same checksum and
@@ -273,17 +313,31 @@ function serveHeaders(object, ext) {
   return headers;
 }
 
-// Handle GET/HEAD /i/{owner}/{repo}/{hash}.{ext}
+// Handle GET/HEAD /i/{owner}/{repo}/{hash}.{ext} on the worker host, and
+// GET/HEAD /{hash}.{ext} on the wildcard serve domain (repo--owner.<domain>)
 export async function handleImageServe(request, env) {
   if (!env.IMAGES) {
     return jsonResponse({ error: 'Image serving not configured (IMAGES R2 binding missing)' }, 503);
   }
 
-  const match = new URL(request.url).pathname.match(SERVE_PATH_PATTERN);
-  if (!match) {
-    return jsonResponse({ error: 'not_found' }, 404);
+  const url = new URL(request.url);
+  let owner, repo, hash, ext;
+
+  const hostCoordinates = coordinatesFromHost(url.hostname, env);
+  if (hostCoordinates) {
+    const match = url.pathname.match(/^\/([a-f0-9]{64})\.([a-z0-9]+)$/);
+    if (!match) {
+      return jsonResponse({ error: 'not_found' }, 404);
+    }
+    ({ owner, repo } = hostCoordinates);
+    [, hash, ext] = match;
+  } else {
+    const match = url.pathname.match(SERVE_PATH_PATTERN);
+    if (!match) {
+      return jsonResponse({ error: 'not_found' }, 404);
+    }
+    [, owner, repo, hash, ext] = match;
   }
-  const [, owner, repo, hash, ext] = match;
   if (!Object.prototype.hasOwnProperty.call(IMAGE_CONTENT_TYPES, ext)) {
     return jsonResponse({ error: 'not_found' }, 404);
   }

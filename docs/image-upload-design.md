@@ -115,8 +115,16 @@ R2 bucket: <owner>/<repo>/<hash>.png ◄──── 9. GET /i/<owner>/<repo>/<h
 7. `gh image` PUTs the file to `upload_url` with the returned headers
    (`x-amz-checksum-sha256: <base64 hash>` + `Content-Type`). R2 rejects the
    upload if the body doesn't match the signed checksum.
-8. `gh image` verifies `HEAD <serve_url>` succeeds and prints the serve URL:
-   `https://<worker>/i/<owner>/<repo>/<hash>.<ext>`.
+8. `gh image` verifies `HEAD <serve_url>` succeeds and prints the serve URL.
+   With a wildcard serve domain configured (`IMAGE_SERVE_DOMAIN`), that is
+   `https://<repo>--<owner>.<domain>/<hash>.<ext>` — GitHub's Camo image
+   proxy is reluctant about `*.workers.dev` hosts, and hostname-based URLs
+   are cleaner to embed. Path-based
+   `https://<worker>/i/<owner>/<repo>/<hash>.<ext>` always works as a
+   fallback (and is what repos with non-hostname-safe names — dots,
+   underscores — get). Owner names cannot contain `--` (GitHub rule), so
+   the last `--` in the host label is always the separator; keys are
+   lowercased since GitHub names are case-insensitively unique.
 
 ## Worker API
 
@@ -126,6 +134,7 @@ R2 bucket: <owner>/<repo>/<hash>.png ◄──── 9. GET /i/<owner>/<repo>/<h
 | `/image-upload/offer` | POST | GitHub Actions OIDC (aud `as-a-bot-images`) | Workflow requests a pre-signed upload URL |
 | `/image-upload/status` | GET | none | Client polls for the upload URL / upload state |
 | `/i/{owner}/{repo}/{hash}.{ext}` | GET, HEAD | none | Serve the stored object (immutable caching) |
+| `https://{repo}--{owner}.<IMAGE_SERVE_DOMAIN>/{hash}.{ext}` | GET, HEAD | none | Hostname-based serving on the wildcard domain (same objects) |
 
 Offer payload (owner/repo come from the OIDC token, never the body):
 
@@ -232,6 +241,18 @@ lands as `GITHUB_WEBHOOK_SECRET` — Actions secret names may not start with
 `CLOUDFLARE_TOKEN` Actions secret).
 The bindings are declared in `wrangler.toml` (`IMAGES`, `IMAGE_OFFERS`) along
 with the `R2_ACCOUNT_ID` / `R2_BUCKET` / `IMAGE_OIDC_AUDIENCE` vars.
+
+For embeddable hostname-based URLs, put a zone on the Cloudflare account and
+set in `wrangler.toml`:
+
+```toml
+IMAGE_SERVE_DOMAIN = "img.example.com"
+routes = [ { pattern = "*.img.example.com/*", zone_name = "example.com" } ]
+```
+
+(A `*.img.example.com` wildcard DNS record proxied through Cloudflare makes
+the route resolve; the worker then serves
+`https://<repo>--<owner>.img.example.com/<hash>.<ext>`.)
 
 ## Limitations / future work
 

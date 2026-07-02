@@ -179,6 +179,7 @@ delivered to GitHub Apps automatically.
 | `GITHUB_API` | GitHub API URL (default: https://api.github.com) | No |
 | `IMAGE_OIDC_AUDIENCE` | OIDC audience for image upload offers (default: as-a-bot-images) | No |
 | `R2_ACCOUNT_ID` / `R2_BUCKET` | R2 coordinates for image uploads | For gh image |
+| `IMAGE_SERVE_DOMAIN` | Wildcard domain for embeddable serve URLs (`repo--owner.<domain>/<hash>.<ext>`); needs a matching `*.<domain>` route | No |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 credentials (secret; pre-signing only) | For gh image |
 | `GITHUB_WEBHOOK_SECRET` | App webhook secret (secret; for /webhook) | For auto-install |
 

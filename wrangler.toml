@@ -34,6 +34,13 @@ ALLOWED_ORIGINS = ""
 IMAGE_OIDC_AUDIENCE = "as-a-bot-images"
 R2_ACCOUNT_ID = "155ec15a52a18a14801e04b019da5e5a"
 R2_BUCKET = "as-a-bot-images"
+# Wildcard serve domain for embeddable image URLs:
+#   https://<repo>--<owner>.<IMAGE_SERVE_DOMAIN>/<hash>.<ext>
+# Empty = disabled (path-based /i/ URLs on the worker host only).
+# To enable: set the domain here and add a wildcard route for a zone on
+# this account, e.g.
+#   routes = [ { pattern = "*.img.example.com/*", zone_name = "example.com" } ]
+IMAGE_SERVE_DOMAIN = ""
 
 # Secrets (configure with wrangler secret put)
 # GITHUB_APP_PRIVATE_KEY - PEM format private key

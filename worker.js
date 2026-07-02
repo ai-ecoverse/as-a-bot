@@ -355,7 +355,7 @@ async function handleUserTokenRefresh(request, env, body) {
 import webFlow from './worker-web.js';
 
 // Import image upload handlers (gh image)
-import { handleImageOffer, handleImageStatus, handleImageServe } from './image-upload.js';
+import { handleImageOffer, handleImageStatus, handleImageServe, coordinatesFromHost } from './image-upload.js';
 
 // Import GitHub App webhook handler (auto-installs the image-upload workflow)
 import { handleGitHubWebhook } from './app-install.js';
@@ -370,8 +370,11 @@ export default {
       return webFlow.fetch(request, env, ctx);
     }
 
-    // Serve uploaded images/videos from R2 (gh image)
-    if (url.pathname.startsWith('/i/') && (request.method === 'GET' || request.method === 'HEAD')) {
+    // Serve uploaded images/videos from R2 (gh image) — path-based on the
+    // worker host, or hostname-based on the wildcard serve domain
+    // (repo--owner.<IMAGE_SERVE_DOMAIN>/<hash>.<ext>)
+    if ((request.method === 'GET' || request.method === 'HEAD') &&
+        (url.pathname.startsWith('/i/') || coordinatesFromHost(url.hostname, env))) {
       return handleImageServe(request, env);
     }
 
