@@ -360,17 +360,24 @@ import { handleImageOffer, handleImageStatus, handleImageServe, isImageServeHost
 // Import GitHub App webhook handler (auto-installs the image-upload workflow)
 import { handleGitHubWebhook } from './app-install.js';
 
+// Import homepage for the serve domain (apex + www)
+import { handleHomepage, isHomepageHost } from './homepage.js';
+
 // Main request handler
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // The wildcard serve domain is fenced off from the API: hosts under
-    // IMAGE_SERVE_DOMAIN only ever serve images
+    // The wildcard serve domain is fenced off from the API: the apex and
+    // www hosts serve the homepage, every other host under
+    // IMAGE_SERVE_DOMAIN only serves images
     // (repo--owner.<IMAGE_SERVE_DOMAIN>/<hash>.<ext>) — everything else
     // there is 404, and API routes stay on the worker host.
     if (isImageServeHost(url.hostname, env)) {
       if (request.method === 'GET' || request.method === 'HEAD') {
+        if (isHomepageHost(url.hostname, env)) {
+          return handleHomepage(request);
+        }
         return handleImageServe(request, env);
       }
       return new Response(JSON.stringify({ error: 'not_found' }), {

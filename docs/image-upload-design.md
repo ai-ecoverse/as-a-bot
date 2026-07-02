@@ -243,11 +243,17 @@ The bindings are declared in `wrangler.toml` (`IMAGES`, `IMAGE_OFFERS`) along
 with the `R2_ACCOUNT_ID` / `R2_BUCKET` / `IMAGE_OIDC_AUDIENCE` vars.
 
 For embeddable hostname-based URLs, put a zone on the Cloudflare account and
-set in `wrangler.toml`:
+configure `wrangler.toml` — note that `routes` is a **top-level** key while
+`IMAGE_SERVE_DOMAIN` lives under `[vars]`:
 
 ```toml
+# top level (next to name/main)
+routes = [
+  { pattern = "*.img.example.com/*", zone_name = "example.com" }
+]
+
+[vars]
 IMAGE_SERVE_DOMAIN = "img.example.com"
-routes = [ { pattern = "*.img.example.com/*", zone_name = "example.com" } ]
 ```
 
 (A `*.img.example.com` wildcard DNS record proxied through Cloudflare makes
