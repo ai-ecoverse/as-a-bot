@@ -16,15 +16,17 @@ describe('isHomepageHost', () => {
 });
 
 describe('handleHomepage', () => {
-  test('serves the homepage with the three links', async () => {
+  test('serves the homepage with links and install instructions', async () => {
     const response = handleHomepage(new Request('https://www.agentbin.net/'));
     assert.equal(response.status, 200);
     assert.match(response.headers.get('Content-Type'), /text\/html/);
     const html = await response.text();
     assert.match(html, /github\.com\/ai-ecoverse\/as-a-bot/);
+    assert.match(html, /github\.com\/ai-ecoverse\/ai-aligned-gh/);
     assert.match(html, /github\.com\/apps\/as-a-bot/);
     assert.match(html, /"https:\/\/github\.com\/ai-ecoverse"/);
-    assert.match(html, /gh image/);
+    assert.match(html, /install\.sh \| sh/);
+    assert.match(html, /gh image screenshot\.png/);
   });
 
   test('404s other paths', () => {
