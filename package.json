@@ -16,6 +16,9 @@
   ],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "devDependencies": {
     "wrangler": "^4.0.0"
   },
