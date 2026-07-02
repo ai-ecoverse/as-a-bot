@@ -17,7 +17,6 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "miniflare": "^4.0.0",
     "wrangler": "^4.0.0"
   },
   "repository": {
