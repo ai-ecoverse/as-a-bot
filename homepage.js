@@ -30,13 +30,15 @@ const HOMEPAGE_HTML = `<!DOCTYPE html>
       background: #0d1117;
       color: #c9d1d9;
       display: flex;
-      justify-content: center;
-      align-items: center;
       min-height: 100vh;
       padding: 2rem 1rem;
       line-height: 1.6;
     }
     main {
+      /* margin auto centers both axes without the align-items:center
+         flexbox trap that clips overflowing content on small screens */
+      margin: auto;
+      width: 100%;
       max-width: 40rem;
       background: #161b22;
       border: 1px solid #30363d;
@@ -62,6 +64,14 @@ const HOMEPAGE_HTML = `<!DOCTYPE html>
       margin-bottom: 1.6rem;
     }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    /* long inline URLs must wrap, not widen the page */
+    p code, li code, .fine code { overflow-wrap: anywhere; }
+    pre { max-width: 100%; }
+    @media (max-width: 480px) {
+      body { padding: .75rem .5rem; }
+      main { padding: 1.5rem 1.1rem; }
+      h1 { font-size: 1.4rem; }
+    }
     .links { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.6rem; }
     .links a {
       display: inline-block;
