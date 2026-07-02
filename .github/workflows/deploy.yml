@@ -1,0 +1,62 @@
+# Deploy the worker on every push to main.
+#
+# Required Actions secrets:
+#   CLOUDFLARE_TOKEN       API token with Workers Scripts edit permission
+#   R2_ACCESS_KEY_ID       R2 S3 credential (pre-signing upload URLs)
+#   R2_SECRET_ACCESS_KEY   R2 S3 credential
+#   GITHUB_WEBHOOK_SECRET  App webhook secret (must match the GitHub App settings)
+#
+# Worker secrets are synced before each deploy, so rotating one is just
+# updating the Actions secret and re-running this workflow.
+
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Sync worker secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.GITHUB_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          for name in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY GITHUB_WEBHOOK_SECRET; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              printf '%s' "$value" | npx wrangler secret put "$name"
+              echo "Synced secret: $name"
+            else
+              echo "Skipping unset secret: $name"
+            fi
+          done
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_TOKEN }}
+        run: npx wrangler deploy

@@ -222,12 +222,12 @@ automatically. That's it — no secrets, no variables.
 ```sh
 wrangler r2 bucket create as-a-bot-images
 wrangler r2 bucket lifecycle add as-a-bot-images --name expire-uploads --expire-days 90
-wrangler secret put R2_ACCESS_KEY_ID       # R2 S3 credential (pre-signing only)
-wrangler secret put R2_SECRET_ACCESS_KEY
-wrangler secret put GITHUB_WEBHOOK_SECRET
-wrangler deploy
 ```
 
+Deployment itself is CI-driven (`.github/workflows/deploy.yml`): every push
+to `main` runs the tests, syncs `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` /
+`GITHUB_WEBHOOK_SECRET` from Actions secrets into Worker secrets, and runs
+`wrangler deploy` (authenticated by the `CLOUDFLARE_TOKEN` Actions secret).
 The bindings are declared in `wrangler.toml` (`IMAGES`, `IMAGE_OFFERS`) along
 with the `R2_ACCOUNT_ID` / `R2_BUCKET` / `IMAGE_OIDC_AUDIENCE` vars.
 

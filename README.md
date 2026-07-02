@@ -149,18 +149,27 @@ The workflow is committed automatically; no secrets or variables are needed.
 
 ### Worker setup
 
+Deployment is CI-driven: every push to `main` runs the tests, syncs worker
+secrets, and deploys (`.github/workflows/deploy.yml`). Set these **Actions
+secrets** on this repo once:
+
+| Actions secret | Purpose |
+|----------------|---------|
+| `CLOUDFLARE_TOKEN` | API token with Workers Scripts edit (deploy) |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 credential (pre-signing only) |
+| `GITHUB_WEBHOOK_SECRET` | App webhook secret — same value as in the app settings |
+
+One-time infrastructure (already provisioned for the canonical deployment):
+
 ```bash
 wrangler r2 bucket create as-a-bot-images
 wrangler r2 bucket lifecycle add as-a-bot-images --name expire-uploads --expire-days 90
-wrangler secret put R2_ACCESS_KEY_ID       # R2 S3 credential (pre-signing only)
-wrangler secret put R2_SECRET_ACCESS_KEY
-wrangler secret put GITHUB_WEBHOOK_SECRET  # app webhook secret for /webhook
-wrangler deploy
 ```
 
-The GitHub App needs its webhook pointed at `/webhook`, the **Installation**
-event subscription, and **Contents + Workflows (Read & write)** repository
-permissions for the auto-install.
+The GitHub App needs its webhook pointed at `/webhook` (with
+`GITHUB_WEBHOOK_SECRET`) and **Contents + Workflows (Read & write)**
+repository permissions for the auto-install. Installation events are
+delivered to GitHub Apps automatically.
 
 ## ⚙️ Configuration
 
