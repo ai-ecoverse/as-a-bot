@@ -6,6 +6,8 @@ import {
   handleImageStatus,
   handleImageServe,
   validateOfferPayload,
+  coordinatesFromHost,
+  isImageServeHost,
   IMAGE_CONTENT_TYPES,
   UPLOAD_TTL_S
 } from './image-upload.js';
@@ -323,6 +325,103 @@ describe('handleImageServe', () => {
   test('HEAD 404s on missing objects', async () => {
     const response = await handleImageServe(new Request(serveUrl, { method: 'HEAD' }), { IMAGES: makeR2() });
     assert.equal(response.status, 404);
+  });
+});
+
+describe('wildcard serve domain', () => {
+  const DOMAIN_ENV = { IMAGE_SERVE_DOMAIN: 'img.example.com' };
+
+  test('coordinatesFromHost parses repo--owner labels', () => {
+    assert.deepEqual(
+      coordinatesFromHost('ai-aligned-gh--ai-ecoverse.img.example.com', DOMAIN_ENV),
+      { owner: 'ai-ecoverse', repo: 'ai-aligned-gh' }
+    );
+    // The LAST -- separates: repos may contain --, owners cannot
+    assert.deepEqual(
+      coordinatesFromHost('my--repo--octo.img.example.com', DOMAIN_ENV),
+      { owner: 'octo', repo: 'my--repo' }
+    );
+  });
+
+  test('coordinatesFromHost rejects non-matching hosts', () => {
+    assert.equal(coordinatesFromHost('worker.example.dev', DOMAIN_ENV), null);
+    assert.equal(coordinatesFromHost('img.example.com', DOMAIN_ENV), null);
+    assert.equal(coordinatesFromHost('no-separator.img.example.com', DOMAIN_ENV), null);
+    assert.equal(coordinatesFromHost('a.b.img.example.com', DOMAIN_ENV), null);
+    assert.equal(coordinatesFromHost('repo--owner.img.example.com', {}), null);
+  });
+
+  test('coordinatesFromHost rejects malformed hostname labels', () => {
+    assert.equal(coordinatesFromHost('repo_x--owner.img.example.com', DOMAIN_ENV), null);
+    assert.equal(coordinatesFromHost('-repo--owner.img.example.com', DOMAIN_ENV), null);
+    assert.equal(coordinatesFromHost('repo--owner-.img.example.com', DOMAIN_ENV), null);
+    const tooLong = `${'a'.repeat(70)}--owner.img.example.com`;
+    assert.equal(coordinatesFromHost(tooLong, DOMAIN_ENV), null);
+  });
+
+  test('isImageServeHost fences the whole serve domain', () => {
+    assert.equal(isImageServeHost('repo--owner.img.example.com', DOMAIN_ENV), true);
+    assert.equal(isImageServeHost('anything.img.example.com', DOMAIN_ENV), true);
+    assert.equal(isImageServeHost('img.example.com', DOMAIN_ENV), true);
+    assert.equal(isImageServeHost('worker.example.dev', DOMAIN_ENV), false);
+    assert.equal(isImageServeHost('evil-img.example.com', DOMAIN_ENV), false);
+    assert.equal(isImageServeHost('repo--owner.img.example.com', {}), false);
+  });
+
+  test('status returns wildcard serve URLs when the domain is configured', async () => {
+    const r2 = makeR2({
+      [`octo/demo/${HASH}.png`]: { size: 3, body: 'abc', checksums: { sha256: hexToBuffer(HASH) } }
+    });
+    const request = new Request(`https://worker.example/image-upload/status?owner=Octo&repo=Demo&hash=${HASH}&ext=png`);
+    const response = await handleImageStatus(request, { IMAGE_OFFERS: makeKV(), IMAGES: r2, ...DOMAIN_ENV });
+    const body = await response.json();
+    assert.equal(body.status, 'uploaded');
+    assert.equal(body.serve_url, `https://demo--octo.img.example.com/${HASH}.png`);
+  });
+
+  test('falls back to path URLs for repos that are not hostname-safe', async () => {
+    const r2 = makeR2({
+      [`octo/my.dotted.repo/${HASH}.png`]: { size: 3, body: 'abc', checksums: { sha256: hexToBuffer(HASH) } }
+    });
+    const request = new Request(`https://worker.example/image-upload/status?owner=octo&repo=my.dotted.repo&hash=${HASH}&ext=png`);
+    const response = await handleImageStatus(request, { IMAGE_OFFERS: makeKV(), IMAGES: r2, ...DOMAIN_ENV });
+    const body = await response.json();
+    assert.equal(body.serve_url, `https://worker.example/i/octo/my.dotted.repo/${HASH}.png`);
+  });
+
+  test('serves objects addressed by wildcard hostname', async () => {
+    const r2 = makeR2({
+      [`octo/demo/${HASH}.png`]: {
+        body: 'imagebytes',
+        size: 10,
+        checksums: { sha256: hexToBuffer(HASH) }
+      }
+    });
+    const request = new Request(`https://demo--octo.img.example.com/${HASH}.png`);
+    const response = await handleImageServe(request, { IMAGES: r2, ...DOMAIN_ENV });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Content-Type'), 'image/png');
+    assert.equal(await response.text(), 'imagebytes');
+  });
+
+  test('404s wildcard-host paths that are not a bare hash', async () => {
+    const r2 = makeR2({});
+    const request = new Request('https://demo--octo.img.example.com/health');
+    const response = await handleImageServe(request, { IMAGES: r2, ...DOMAIN_ENV });
+    assert.equal(response.status, 404);
+  });
+
+  test('path-based serving still works when the domain is configured', async () => {
+    const r2 = makeR2({
+      [`octo/demo/${HASH}.png`]: {
+        body: 'imagebytes',
+        size: 10,
+        checksums: { sha256: hexToBuffer(HASH) }
+      }
+    });
+    const request = new Request(`https://worker.example/i/Octo/Demo/${HASH}.png`);
+    const response = await handleImageServe(request, { IMAGES: r2, ...DOMAIN_ENV });
+    assert.equal(response.status, 200);
   });
 });
 

@@ -3,6 +3,14 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 account_id = "155ec15a52a18a14801e04b019da5e5a"
 
+# Wildcard route for embeddable image serve URLs (gh image):
+#   https://<repo>--<owner>.agentbin.net/<hash>.<ext>
+# The apex route serves the homepage (also on www, via the wildcard).
+routes = [
+  { pattern = "*.agentbin.net/*", zone_name = "agentbin.net" },
+  { pattern = "agentbin.net/*", zone_name = "agentbin.net" }
+]
+
 [env.production]
 name = "as-bot-worker"
 
@@ -34,6 +42,11 @@ ALLOWED_ORIGINS = ""
 IMAGE_OIDC_AUDIENCE = "as-a-bot-images"
 R2_ACCOUNT_ID = "155ec15a52a18a14801e04b019da5e5a"
 R2_BUCKET = "as-a-bot-images"
+# Wildcard serve domain for embeddable image URLs:
+#   https://<repo>--<owner>.<IMAGE_SERVE_DOMAIN>/<hash>.<ext>
+# Empty = disabled (path-based /i/ URLs on the worker host only).
+# Requires the matching wildcard route above.
+IMAGE_SERVE_DOMAIN = "agentbin.net"
 
 # Secrets (configure with wrangler secret put)
 # GITHUB_APP_PRIVATE_KEY - PEM format private key
