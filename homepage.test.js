@@ -25,7 +25,7 @@ describe('handleHomepage', () => {
     assert.match(html, /github\.com\/ai-ecoverse\/ai-aligned-gh/);
     assert.match(html, /github\.com\/apps\/as-a-bot/);
     assert.match(html, /"https:\/\/github\.com\/ai-ecoverse"/);
-    assert.match(html, /install\.sh \| sh/);
+    assert.match(html, /raw\.githubusercontent\.com\/ai-ecoverse\/ai-aligned-gh\/[^/]+\/install\.sh/);
     assert.match(html, /gh image screenshot\.png/);
   });
 
