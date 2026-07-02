@@ -3,6 +3,12 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 account_id = "155ec15a52a18a14801e04b019da5e5a"
 
+# Keep the workers.dev subdomain alive alongside the custom routes -
+# every existing client (ai-aligned-gh auth flows, gh image polling, the
+# GitHub App webhook) targets as-bot-worker.minivelos.workers.dev, and
+# declaring routes disables workers.dev by default.
+workers_dev = true
+
 # Wildcard route for embeddable image serve URLs (gh image):
 #   https://<repo>--<owner>.agentbin.net/<hash>.<ext>
 # The apex route serves the homepage (also on www, via the wildcard).
