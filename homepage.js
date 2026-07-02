@@ -60,13 +60,13 @@ const HOMEPAGE_HTML = `<!DOCTYPE html>
       border-radius: 6px;
       padding: .9rem 1.1rem;
       overflow-x: auto;
+      max-width: 100%;
       font-size: .85rem;
       margin-bottom: 1.6rem;
     }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     /* long inline URLs must wrap, not widen the page */
     p code, li code, .fine code { overflow-wrap: anywhere; }
-    pre { max-width: 100%; }
     @media (max-width: 480px) {
       body { padding: .75rem .5rem; }
       main { padding: 1.5rem 1.1rem; }
