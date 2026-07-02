@@ -16,8 +16,10 @@
   ],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "devDependencies": {
-    "miniflare": "^4.0.0",
     "wrangler": "^4.0.0"
   },
   "repository": {
