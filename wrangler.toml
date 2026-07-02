@@ -16,13 +16,31 @@ id = "4d16c1ca5973424990ae00ab7f5c6bf7"
 binding = "AUTH_STATES"
 id = "6fac9e3755f74be0b56d33da9d0942d9"
 
+# KV Namespace for pending image upload offers (gh image)
+[[kv_namespaces]]
+binding = "IMAGE_OFFERS"
+id = "5587c4066bef45e9b58440e90afcc738"
+
+# R2 bucket for uploaded images/videos (gh image)
+# Create before first deploy: wrangler r2 bucket create as-a-bot-images
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "as-a-bot-images"
+
 # Environment variables (non-sensitive)
 [vars]
 GITHUB_API = "https://api.github.com"
 ALLOWED_ORIGINS = ""
+IMAGE_OIDC_AUDIENCE = "as-a-bot-images"
+R2_ACCOUNT_ID = "155ec15a52a18a14801e04b019da5e5a"
+R2_BUCKET = "as-a-bot-images"
 
 # Secrets (configure with wrangler secret put)
 # GITHUB_APP_PRIVATE_KEY - PEM format private key
 # GITHUB_APP_ID - Numeric App ID
 # GITHUB_CLIENT_ID - App Client ID
+# GITHUB_CLIENT_SECRET - App Client Secret (web flow + token refresh)
+# GITHUB_WEBHOOK_SECRET - App webhook secret (for /webhook)
+# R2_ACCESS_KEY_ID - R2 S3 credential for pre-signing upload URLs
+# R2_SECRET_ACCESS_KEY - R2 S3 credential for pre-signing upload URLs
 # CLOUDFLARE_TOKEN - For GitHub Actions deployment
