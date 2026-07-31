@@ -34,6 +34,23 @@ function makeKV(initial = {}) {
   };
 }
 
+// Minimal single-range parser, sufficient to exercise the serve path.
+function resolveRange(headerValue, size) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(headerValue.trim());
+  if (!match) return null;
+  const [, startRaw, endRaw] = match;
+  if (startRaw === '' && endRaw === '') return null;
+  if (startRaw === '') {
+    const length = Math.min(Number(endRaw), size);
+    return length > 0 ? { offset: size - length, length } : null;
+  }
+  const offset = Number(startRaw);
+  if (offset >= size) return null;
+  const end = endRaw === '' ? size - 1 : Math.min(Number(endRaw), size - 1);
+  if (end < offset) return null;
+  return { offset, length: end - offset + 1 };
+}
+
 function makeR2(objects = {}) {
   return {
     objects,
@@ -44,11 +61,27 @@ function makeR2(objects = {}) {
         ? { size: obj.size, httpEtag: obj.httpEtag, checksums: obj.checksums, uploaded: obj.uploaded }
         : null;
     },
-    async get(key) {
+    async get(key, options) {
       const obj = objects[key];
-      return obj
-        ? { body: obj.body, size: obj.size, httpEtag: obj.httpEtag, checksums: obj.checksums, uploaded: obj.uploaded }
-        : null;
+      if (!obj) return null;
+      const result = {
+        body: obj.body,
+        size: obj.size,
+        httpEtag: obj.httpEtag,
+        checksums: obj.checksums,
+        uploaded: obj.uploaded
+      };
+      const rangeHeader = options && options.range ? options.range.get('range') : null;
+      if (rangeHeader) {
+        // Mirrors R2's behaviour: resolve the range or throw when unsatisfiable.
+        const range = resolveRange(rangeHeader, obj.size);
+        if (!range) {
+          throw new Error('The requested range is not satisfiable');
+        }
+        result.range = range;
+        result.body = String(obj.body).slice(range.offset, range.offset + range.length);
+      }
+      return result;
     },
     async delete(key) {
       this.deleted.push(key);
@@ -244,6 +277,101 @@ describe('handleImageServe', () => {
     assert.ok(maxAge <= UPLOAD_TTL_S - 3500, `max-age ${maxAge} should be capped below the remaining TTL`);
     assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
     assert.equal(await response.text(), 'imagebytes');
+  });
+
+  const videoUrl = `https://worker.example/i/octo/demo/${HASH}.mp4`;
+
+  function makeVideoR2() {
+    return makeR2({
+      [`octo/demo/${HASH}.mp4`]: {
+        body: '0123456789',
+        size: 10,
+        httpEtag: '"etag"',
+        checksums: { sha256: hexToBuffer(HASH) }
+      }
+    });
+  }
+
+  test('advertises byte ranges on unranged responses', async () => {
+    const response = await handleImageServe(new Request(videoUrl), { IMAGES: makeVideoR2() });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Accept-Ranges'), 'bytes');
+    assert.equal(response.headers.get('Content-Length'), '10');
+    assert.equal(response.headers.get('Content-Range'), null);
+    assert.equal(response.headers.get('Content-Type'), 'video/mp4');
+  });
+
+  test('answers a ranged GET with 206 and a correct Content-Range', async () => {
+    const request = new Request(videoUrl, { headers: { Range: 'bytes=2-5' } });
+    const response = await handleImageServe(request, { IMAGES: makeVideoR2() });
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get('Content-Range'), 'bytes 2-5/10');
+    assert.equal(response.headers.get('Content-Length'), '4');
+    assert.equal(response.headers.get('Accept-Ranges'), 'bytes');
+    assert.equal(await response.text(), '2345');
+  });
+
+  test('handles the open-ended range Safari opens a media source with', async () => {
+    const request = new Request(videoUrl, { headers: { Range: 'bytes=0-' } });
+    const response = await handleImageServe(request, { IMAGES: makeVideoR2() });
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get('Content-Range'), 'bytes 0-9/10');
+    assert.equal(await response.text(), '0123456789');
+  });
+
+  test('handles a suffix range', async () => {
+    const request = new Request(videoUrl, { headers: { Range: 'bytes=-3' } });
+    const response = await handleImageServe(request, { IMAGES: makeVideoR2() });
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get('Content-Range'), 'bytes 7-9/10');
+    assert.equal(await response.text(), '789');
+  });
+
+  test('answers an unsatisfiable range with 416', async () => {
+    const request = new Request(videoUrl, { headers: { Range: 'bytes=99999-' } });
+    const response = await handleImageServe(request, { IMAGES: makeVideoR2() });
+    assert.equal(response.status, 416);
+    assert.equal(response.headers.get('Content-Range'), 'bytes */10');
+  });
+
+  test('404s a ranged GET for a missing object rather than 416', async () => {
+    const request = new Request(videoUrl, { headers: { Range: 'bytes=0-1' } });
+    const response = await handleImageServe(request, { IMAGES: makeR2() });
+    assert.equal(response.status, 404);
+  });
+
+  test('expiry and checksum guards still fire ahead of range handling', async () => {
+    const expiredR2 = makeR2({
+      [`octo/demo/${HASH}.mp4`]: {
+        body: '0123456789',
+        size: 10,
+        checksums: { sha256: hexToBuffer(HASH) },
+        uploaded: EXPIRED_UPLOAD_DATE
+      }
+    });
+    const expired = await handleImageServe(
+      new Request(videoUrl, { headers: { Range: 'bytes=0-1' } }),
+      { IMAGES: expiredR2 }
+    );
+    assert.equal(expired.status, 410);
+
+    const tamperedR2 = makeR2({
+      [`octo/demo/${HASH}.mp4`]: { body: '0123456789', size: 10 }
+    });
+    const tampered = await handleImageServe(
+      new Request(videoUrl, { headers: { Range: 'bytes=0-1' } }),
+      { IMAGES: tamperedR2 }
+    );
+    assert.equal(tampered.status, 409);
+  });
+
+  test('HEAD advertises byte ranges', async () => {
+    const response = await handleImageServe(
+      new Request(videoUrl, { method: 'HEAD' }),
+      { IMAGES: makeVideoR2() }
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Accept-Ranges'), 'bytes');
   });
 
   test('refuses to serve objects whose checksum does not match the key', async () => {
