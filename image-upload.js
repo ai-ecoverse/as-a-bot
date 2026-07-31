@@ -311,7 +311,7 @@ export async function handleImageStatus(request, env) {
   return jsonResponse({ status: 'pending' }, 202);
 }
 
-function serveHeaders(object, ext) {
+function serveHeaders(object, ext, partial) {
   // Objects are immutable but expire: cap the cache lifetime at whatever
   // is left of the object's 90 days.
   const remaining = Math.max(0, Math.floor(UPLOAD_TTL_S - objectAgeSeconds(object)));
@@ -319,12 +319,21 @@ function serveHeaders(object, ext) {
     'Content-Type': IMAGE_CONTENT_TYPES[ext] || 'application/octet-stream',
     'Content-Length': String(object.size),
     'Cache-Control': `public, max-age=${remaining}, immutable`,
+    // Media players — notably Safari/AVFoundation, which backs <video> on
+    // macOS and iOS — refuse a source whose origin does not demonstrably
+    // support byte ranges, so this must be advertised on every response.
+    'Accept-Ranges': 'bytes',
     // Defense against active content (mainly SVG): never sniff, never execute
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'"
   };
   if (object.httpEtag) {
     headers['ETag'] = object.httpEtag;
+  }
+  if (partial) {
+    const { offset, length } = partial;
+    headers['Content-Length'] = String(length);
+    headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`;
   }
   return headers;
 }
@@ -374,7 +383,24 @@ export async function handleImageServe(request, env) {
     return new Response(null, { status: 200, headers: serveHeaders(head, ext) });
   }
 
-  const object = await env.IMAGES.get(key);
+  // Byte ranges are requested from R2 directly rather than sliced here, so a
+  // seek never pulls the whole object out of storage.
+  const rangeHeader = request.headers.get('range');
+  let object;
+  try {
+    object = await env.IMAGES.get(key, rangeHeader ? { range: request.headers } : undefined);
+  } catch {
+    // R2 rejects an unsatisfiable range. Answer per RFC 9110 §15.5.17 rather
+    // than surfacing a 500.
+    const head = await env.IMAGES.head(key);
+    if (!head) {
+      return jsonResponse({ error: 'not_found' }, 404);
+    }
+    return new Response(null, {
+      status: 416,
+      headers: { 'Content-Range': `bytes */${head.size}`, 'Accept-Ranges': 'bytes' }
+    });
+  }
   if (!object) {
     return jsonResponse({ error: 'not_found' }, 404);
   }
@@ -394,5 +420,9 @@ export async function handleImageServe(request, env) {
     }, 409);
   }
 
-  return new Response(object.body, { status: 200, headers: serveHeaders(object, ext) });
+  const partial = rangeHeader && object.range ? object.range : null;
+  return new Response(object.body, {
+    status: partial ? 206 : 200,
+    headers: serveHeaders(object, ext, partial)
+  });
 }
