@@ -1,5 +1,26 @@
 # Design: `gh image` — Image/Video Uploads for Coding Agents
 
+> **Retired (2026-09).** gh 2.99.0 added a repeatable `--attach` flag to
+> `gh issue|pr create|edit|comment`, which uploads local images and videos to
+> GitHub natively
+> ([changelog](https://github.blog/changelog/2026-09-01-github-cli-media-in-issues-pull-requests-and-comments/)),
+> so `gh image` and the upload brokering described below no longer exist. The
+> client side was removed in
+> [ai-aligned-gh#74](https://github.com/ai-ecoverse/ai-aligned-gh/pull/74);
+> the worker now answers `410 Gone` on `/image-upload/offer` and
+> `/image-upload/status`, redirects `agentbin.net` to the changelog entry, and
+> no longer auto-installs the workflow on app installation. Objects that were
+> already uploaded are still served (`/i/{owner}/{repo}/{hash}.{ext}` and
+> `{repo}--{owner}.agentbin.net/{hash}.{ext}`) until the bucket's 90-day
+> retention lapses, so existing PR and issue embeds do not break.
+>
+> This document is kept as-is for historical reference: it records the trust
+> model and the reasoning behind a design that ran in production, and the
+> descriptions below are written in the present tense of that time. The
+> modules it names — `r2-presign.js`, `github-oidc.js`, `workflow-template.js`
+> and `templates/image-upload.yml` — were deleted with the retirement; read
+> them from git history.
+
 ## Problem
 
 `gh` on its own cannot attach images to a PR or issue
@@ -46,8 +67,8 @@ Actions for the trust boundary):
 2. **`image-upload.yml` workflow** — a thin, secret-free authorization relay,
    committed to each repo automatically by the app on installation
    (`app-install.js`; canonical copy in `workflow-template.js`, mirrored in
-   [`templates/image-upload.yml`](../templates/image-upload.yml) for manual
-   installs). GitHub enforces that only users with write access can dispatch
+   `templates/image-upload.yml` for manual installs). GitHub enforces that
+   only users with write access can dispatch
    it; its OIDC token proves *which repository* is asking.
 3. **as-a-bot Worker** — verifies the OIDC token, **mints the pre-signed R2
    PUT URL itself** (`r2-presign.js`, no dependencies) using R2 credentials
@@ -215,7 +236,7 @@ repository. The app commits `.github/workflows/image-upload.yml`
 automatically. That's it — no secrets, no variables.
 
 (Manual alternative: copy
-[`templates/image-upload.yml`](../templates/image-upload.yml) to
+`templates/image-upload.yml` to
 `.github/workflows/image-upload.yml`.)
 
 ### GitHub App (operator, one-time)

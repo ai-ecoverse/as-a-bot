@@ -4,14 +4,16 @@ compatibility_date = "2024-01-01"
 account_id = "155ec15a52a18a14801e04b019da5e5a"
 
 # Keep the workers.dev subdomain alive alongside the custom routes -
-# every existing client (ai-aligned-gh auth flows, gh image polling, the
-# GitHub App webhook) targets as-bot-worker.minivelos.workers.dev, and
-# declaring routes disables workers.dev by default.
+# every existing client (ai-aligned-gh auth flows, the GitHub App webhook,
+# already-embedded image URLs) targets as-bot-worker.minivelos.workers.dev,
+# and declaring routes disables workers.dev by default.
 workers_dev = true
 
-# Wildcard route for embeddable image serve URLs (gh image):
+# Wildcard route for embeddable image serve URLs:
 #   https://<repo>--<owner>.agentbin.net/<hash>.<ext>
-# The apex route serves the homepage (also on www, via the wildcard).
+# Uploading is retired (gh --attach replaces gh image), but already-uploaded
+# objects keep being served until the 90-day R2 retention lapses. The apex
+# route (also www, via the wildcard) redirects to the announcement.
 routes = [
   { pattern = "*.agentbin.net/*", zone_name = "agentbin.net" },
   { pattern = "agentbin.net/*", zone_name = "agentbin.net" }
@@ -30,13 +32,14 @@ id = "4d16c1ca5973424990ae00ab7f5c6bf7"
 binding = "AUTH_STATES"
 id = "6fac9e3755f74be0b56d33da9d0942d9"
 
-# KV Namespace for pending image upload offers (gh image)
+# KV Namespace for pending image upload offers - unused since uploading was
+# retired; kept bound so removing it is a separate, deliberate change
 [[kv_namespaces]]
 binding = "IMAGE_OFFERS"
 id = "5587c4066bef45e9b58440e90afcc738"
 
-# R2 bucket for uploaded images/videos (gh image)
-# Create before first deploy: wrangler r2 bucket create as-a-bot-images
+# R2 bucket holding already-uploaded images/videos. Read-only in practice
+# now: the 90-day lifecycle rule drains it.
 [[r2_buckets]]
 binding = "IMAGES"
 bucket_name = "as-a-bot-images"
@@ -45,6 +48,7 @@ bucket_name = "as-a-bot-images"
 [vars]
 GITHUB_API = "https://api.github.com"
 ALLOWED_ORIGINS = ""
+# IMAGE_OIDC_AUDIENCE is unused since upload brokering was retired
 IMAGE_OIDC_AUDIENCE = "as-a-bot-images"
 R2_ACCOUNT_ID = "155ec15a52a18a14801e04b019da5e5a"
 R2_BUCKET = "as-a-bot-images"
@@ -60,6 +64,7 @@ IMAGE_SERVE_DOMAIN = "agentbin.net"
 # GITHUB_CLIENT_ID - App Client ID
 # GITHUB_CLIENT_SECRET - App Client Secret (web flow + token refresh)
 # GITHUB_WEBHOOK_SECRET - App webhook secret (for /webhook)
-# R2_ACCESS_KEY_ID - R2 S3 credential for pre-signing upload URLs
-# R2_SECRET_ACCESS_KEY - R2 S3 credential for pre-signing upload URLs
+# R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY - were used to pre-sign upload
+#   URLs; unused since uploading was retired (safe to delete once the
+#   retirement has settled)
 # CLOUDFLARE_TOKEN - For GitHub Actions deployment

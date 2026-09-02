@@ -117,59 +117,41 @@ curl -X POST https://api.github.com/repos/OWNER/REPO/issues \
 
 **Expected**: Issue shows your username + app badge, NOT "app/as-a-bot"
 
-## 🖼️ Image Uploads (`gh image`)
+## 🖼️ Image Uploads (`gh image`) — retired
 
-`gh` cannot attach images to PRs or issues ([cli/cli#12960](https://github.com/cli/cli/issues/12960)),
-which is a real limitation for coding agents. This worker doubles as an upload
-broker for the `gh image` command in
-[ai-aligned-gh](https://github.com/ai-ecoverse/ai-aligned-gh): a secret-free
-GitHub Actions workflow in the target repo (dispatchable only by users with
-write access, and **committed automatically when the app is installed**)
-proves repository identity via OIDC; the worker mints a checksum-bound
-pre-signed R2 PUT URL; `gh image` polls for it, uploads the file, and gets
-back a stable serve URL. Uploads are kept for 90 days — re-running
-`gh image` on the same file renews the same URL.
-
-See **[docs/image-upload-design.md](docs/image-upload-design.md)** for the full
-design and trust model.
-
-### Endpoints
+`gh image` is **retired**. gh 2.99.0 (2026-09-01) added a repeatable
+`--attach` flag to `gh issue|pr create|edit|comment`, which uploads local
+images and videos to GitHub natively — the limitation this worker worked
+around ([cli/cli#12960](https://github.com/cli/cli/issues/12960)) is gone:
 
 ```bash
-POST /webhook                # app installation events: auto-install the workflow
-POST /image-upload/offer     # workflow requests a pre-signed URL (GitHub OIDC auth)
-GET  /image-upload/status    # gh image polls: ?owner=&repo=&hash=&ext=
-GET  /i/{owner}/{repo}/{hash}.{ext}   # serve the uploaded file (immutable, 90-day TTL)
+gh pr comment 42 --body "Before/after" --attach before.png --attach after.png
 ```
 
-### Repo setup
+See GitHub's
+[changelog entry](https://github.blog/changelog/2026-09-01-github-cli-media-in-issues-pull-requests-and-comments/).
+The client side was removed in
+[ai-aligned-gh#74](https://github.com/ai-ecoverse/ai-aligned-gh/pull/74).
 
-Install the [as-a-bot app](https://github.com/apps/as-a-bot) on the repository.
-The workflow is committed automatically; no secrets or variables are needed.
+What this means for the worker:
 
-### Worker setup
+| Endpoint | Status |
+|----------|--------|
+| `POST /image-upload/offer` | **410 Gone** — brokering retired |
+| `GET /image-upload/status` | **410 Gone** — brokering retired |
+| `GET /i/{owner}/{repo}/{hash}.{ext}` | Still served, until the 90-day R2 retention lapses |
+| `https://{repo}--{owner}.agentbin.net/{hash}.{ext}` | Still served, same TTL |
+| `https://agentbin.net/` | 302 redirect to the changelog entry |
+| `POST /webhook` | Still verified and answered, but no longer commits a workflow |
 
-Deployment is CI-driven: every push to `main` runs the tests, syncs worker
-secrets, and deploys (`.github/workflows/deploy.yml`). Set these **Actions
-secrets** on this repo once:
+Images already embedded in existing PRs and issues keep resolving so nothing
+breaks retroactively; they lapse on their own as the R2 retention expires.
+Repositories that already have `.github/workflows/image-upload.yml` are left
+alone — the workflow is inert now that the offer endpoint answers 410.
 
-| Actions secret | Purpose |
-|----------------|---------|
-| `CLOUDFLARE_TOKEN` | API token with Workers Scripts edit (deploy) |
-| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 credential (pre-signing only) |
-| `GH_WEBHOOK_SECRET` | App webhook secret — same value as in the app settings (synced to the `GITHUB_WEBHOOK_SECRET` worker secret; Actions secret names may not start with `GITHUB_`) |
-
-One-time infrastructure (already provisioned for the canonical deployment):
-
-```bash
-wrangler r2 bucket create as-a-bot-images
-wrangler r2 bucket lifecycle add as-a-bot-images --name expire-uploads --expire-days 90
-```
-
-The GitHub App needs its webhook pointed at `/webhook` (with
-`GITHUB_WEBHOOK_SECRET`) and **Contents + Workflows (Read & write)**
-repository permissions for the auto-install. Installation events are
-delivered to GitHub Apps automatically.
+**[docs/image-upload-design.md](docs/image-upload-design.md)** is kept for
+historical reference: it explains the OIDC/pre-signed-URL trust model the
+service used.
 
 ## ⚙️ Configuration
 
@@ -177,11 +159,8 @@ delivered to GitHub Apps automatically.
 |----------|-------------|----------|
 | `GITHUB_CLIENT_ID` | GitHub App Client ID | Yes |
 | `GITHUB_API` | GitHub API URL (default: https://api.github.com) | No |
-| `IMAGE_OIDC_AUDIENCE` | OIDC audience for image upload offers (default: as-a-bot-images) | No |
-| `R2_ACCOUNT_ID` / `R2_BUCKET` | R2 coordinates for image uploads | For gh image |
-| `IMAGE_SERVE_DOMAIN` | Wildcard domain for embeddable serve URLs (`repo--owner.<domain>/<hash>.<ext>`); needs a matching `*.<domain>` route | No |
-| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 credentials (secret; pre-signing only) | For gh image |
-| `GITHUB_WEBHOOK_SECRET` | App webhook secret (secret; for /webhook) | For auto-install |
+| `IMAGE_SERVE_DOMAIN` | Wildcard domain for serving already-uploaded files (`repo--owner.<domain>/<hash>.<ext>`); needs a matching `*.<domain>` route | No |
+| `GITHUB_WEBHOOK_SECRET` | App webhook secret (secret; for /webhook) | For /webhook |
 
 ## 🏗️ Architecture
 

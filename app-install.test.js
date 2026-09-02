@@ -2,8 +2,7 @@ import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-import { handleGitHubWebhook, installWorkflowInRepo } from './app-install.js';
-import { IMAGE_UPLOAD_WORKFLOW_PATH } from './workflow-template.js';
+import { handleGitHubWebhook } from './app-install.js';
 
 const SECRET = 'test-webhook-secret';
 
@@ -24,10 +23,9 @@ function webhookRequest(event, payload, { signature } = {}) {
   });
 }
 
-// A well-formed but worthless RSA key is overkill for these tests: token
-// creation is exercised through a stubbed fetch, and the JWT signing path
-// is short-circuited by making the token request the first fetch failure
-// where needed. We stub global.fetch and record calls.
+// The webhook no longer calls GitHub at all (the image-upload workflow it
+// used to commit is retired), so we stub global.fetch purely to assert that
+// nothing reaches out.
 let fetchCalls;
 let fetchResponses;
 const realFetch = global.fetch;
@@ -52,7 +50,6 @@ afterEach(() => {
 const ENV = {
   GITHUB_WEBHOOK_SECRET: SECRET,
   GITHUB_APP_ID: '12345',
-  // Tests never reach real JWT signing unless noted; see stubs
   GITHUB_APP_PRIVATE_KEY: 'unused',
   GITHUB_API: 'https://api.github.example'
 };
@@ -93,61 +90,30 @@ describe('handleGitHubWebhook', () => {
     assert.equal(fetchCalls.length, 0);
   });
 
-  test('accepts installation created events and reports repo count', async () => {
-    // Token creation fails fast in this test (empty fetch queue → 500),
-    // which exercises the accepted-response path without real GitHub calls.
+  test('acknowledges installation created events without committing a workflow', async () => {
     const payload = {
       action: 'created',
       installation: { id: 42 },
       repositories: [{ full_name: 'octo/demo' }, { full_name: 'octo/two' }]
     };
     const response = await handleGitHubWebhook(webhookRequest('installation', payload), ENV);
-    assert.equal(response.status, 202);
+    assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.status, 'accepted');
-    assert.equal(body.repositories, 2);
+    assert.equal(body.status, 'ignored');
+    assert.match(body.reason, /retired/);
+    // The auto-install is gone: no installation token, no contents API calls.
+    assert.equal(fetchCalls.length, 0);
   });
 
-  test('accepts installation_repositories added events', async () => {
+  test('acknowledges installation_repositories added events without committing a workflow', async () => {
     const payload = {
       action: 'added',
       installation: { id: 42 },
       repositories_added: [{ full_name: 'octo/three' }]
     };
     const response = await handleGitHubWebhook(webhookRequest('installation_repositories', payload), ENV);
-    assert.equal(response.status, 202);
-    const body = await response.json();
-    assert.equal(body.repositories, 1);
-  });
-});
-
-describe('installWorkflowInRepo', () => {
-  test('commits the workflow when the repo does not have one', async () => {
-    fetchResponses.push(new Response('{}', { status: 404 })); // existence check
-    fetchResponses.push(new Response('{}', { status: 201 })); // PUT contents
-
-    const result = await installWorkflowInRepo(ENV, 'ghs_token', 'octo/demo');
-    assert.equal(result, 'installed');
-    assert.equal(fetchCalls.length, 2);
-    assert.ok(fetchCalls[0].url.endsWith(`/repos/octo/demo/contents/${IMAGE_UPLOAD_WORKFLOW_PATH}`));
-    assert.equal(fetchCalls[1].method, 'PUT');
-    const putBody = JSON.parse(fetchCalls[1].body);
-    assert.match(putBody.message, /image-upload workflow/);
-    const committed = Buffer.from(putBody.content, 'base64').toString();
-    assert.match(committed, /workflow_dispatch/);
-    assert.match(committed, /id-token: write/);
-  });
-
-  test('skips repos that already have the workflow', async () => {
-    fetchResponses.push(new Response('{}', { status: 200 }));
-    const result = await installWorkflowInRepo(ENV, 'ghs_token', 'octo/demo');
-    assert.equal(result, 'exists');
-    assert.equal(fetchCalls.length, 1);
-  });
-
-  test('reports errors without throwing', async () => {
-    fetchResponses.push(new Response('{}', { status: 403 }));
-    const result = await installWorkflowInRepo(ENV, 'ghs_token', 'octo/demo');
-    assert.equal(result, 'error');
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).status, 'ignored');
+    assert.equal(fetchCalls.length, 0);
   });
 });

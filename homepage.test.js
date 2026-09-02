@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { handleHomepage, isHomepageHost } from './homepage.js';
+import { RETIREMENT_URL } from './retired.js';
 
 const ENV = { IMAGE_SERVE_DOMAIN: 'agentbin.net' };
 
@@ -16,27 +17,37 @@ describe('isHomepageHost', () => {
 });
 
 describe('handleHomepage', () => {
-  test('serves the homepage with links and install instructions', async () => {
+  test('redirects to the gh --attach announcement', async () => {
     const response = handleHomepage(new Request('https://www.agentbin.net/'));
-    assert.equal(response.status, 200);
-    assert.match(response.headers.get('Content-Type'), /text\/html/);
-    const html = await response.text();
-    assert.match(html, /github\.com\/ai-ecoverse\/as-a-bot/);
-    assert.match(html, /github\.com\/ai-ecoverse\/ai-aligned-gh/);
-    assert.match(html, /github\.com\/apps\/as-a-bot/);
-    assert.match(html, /"https:\/\/github\.com\/ai-ecoverse"/);
-    assert.match(html, /raw\.githubusercontent\.com\/ai-ecoverse\/ai-aligned-gh\/[^/]+\/install\.sh/);
-    assert.match(html, /gh image screenshot\.png/);
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('Location'), RETIREMENT_URL);
+    assert.equal(await response.text(), '');
   });
 
-  test('404s other paths', () => {
+  test('redirects with 302 so it stays reversible and uncached', () => {
+    const response = handleHomepage(new Request('https://agentbin.net/index.html'));
+    assert.equal(response.status, 302);
+    assert.notEqual(response.status, 301);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  });
+
+  test('404s other paths', async () => {
     const response = handleHomepage(new Request('https://www.agentbin.net/anything'));
     assert.equal(response.status, 404);
+    assert.equal(await response.text(), 'Not found');
   });
 
-  test('answers HEAD without a body', async () => {
-    const response = handleHomepage(new Request('https://agentbin.net/', { method: 'HEAD' }));
-    assert.equal(response.status, 200);
+  test('404s HEAD on other paths without a body', async () => {
+    const response = handleHomepage(
+      new Request('https://www.agentbin.net/anything', { method: 'HEAD' })
+    );
+    assert.equal(response.status, 404);
     assert.equal(await response.text(), '');
+  });
+
+  test('redirects HEAD as well', () => {
+    const response = handleHomepage(new Request('https://agentbin.net/', { method: 'HEAD' }));
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('Location'), RETIREMENT_URL);
   });
 });
