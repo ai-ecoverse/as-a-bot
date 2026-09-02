@@ -23,7 +23,8 @@ export function isHomepageHost(hostname, env) {
 export function handleHomepage(request) {
   const { pathname } = new URL(request.url);
   if (pathname !== '/' && pathname !== '/index.html') {
-    return new Response('Not found', { status: 404 });
+    // HEAD responses carry no body (RFC 9110 §9.3.2)
+    return new Response(request.method === 'HEAD' ? null : 'Not found', { status: 404 });
   }
   return retirementRedirect();
 }

@@ -31,9 +31,18 @@ describe('handleHomepage', () => {
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
   });
 
-  test('404s other paths', () => {
+  test('404s other paths', async () => {
     const response = handleHomepage(new Request('https://www.agentbin.net/anything'));
     assert.equal(response.status, 404);
+    assert.equal(await response.text(), 'Not found');
+  });
+
+  test('404s HEAD on other paths without a body', async () => {
+    const response = handleHomepage(
+      new Request('https://www.agentbin.net/anything', { method: 'HEAD' })
+    );
+    assert.equal(response.status, 404);
+    assert.equal(await response.text(), '');
   });
 
   test('redirects HEAD as well', () => {
