@@ -354,14 +354,17 @@ async function handleUserTokenRefresh(request, env, body) {
 // Import web flow handlers
 import webFlow from './worker-web.js';
 
-// Import image upload handlers (gh image)
-import { handleImageOffer, handleImageStatus, handleImageServe, isImageServeHost } from './image-upload.js';
+// Import serving for objects uploaded by the retired gh image flow
+import { handleImageServe, isImageServeHost } from './image-upload.js';
 
-// Import GitHub App webhook handler (auto-installs the image-upload workflow)
+// Import GitHub App webhook handler
 import { handleGitHubWebhook } from './app-install.js';
 
-// Import homepage for the serve domain (apex + www)
+// Import apex/www handling for the serve domain (redirects: gh image retired)
 import { handleHomepage, isHomepageHost } from './homepage.js';
+
+// Retirement of the gh image upload endpoints (replaced by gh --attach)
+import { retiredUploadResponse } from './retired.js';
 
 // Main request handler
 export default {
@@ -369,8 +372,8 @@ export default {
     const url = new URL(request.url);
 
     // The wildcard serve domain is fenced off from the API: the apex and
-    // www hosts serve the homepage, every other host under
-    // IMAGE_SERVE_DOMAIN only serves images
+    // www hosts redirect to the gh --attach announcement, every other host
+    // under IMAGE_SERVE_DOMAIN only serves already-uploaded images
     // (repo--owner.<IMAGE_SERVE_DOMAIN>/<hash>.<ext>) — everything else
     // there is 404, and API routes stay on the worker host.
     if (isImageServeHost(url.hostname, env)) {
@@ -391,15 +394,18 @@ export default {
       return webFlow.fetch(request, env, ctx);
     }
 
-    // Serve uploaded images/videos from R2 (gh image), path-based on the
-    // worker host
+    // Serve already-uploaded images/videos from R2, path-based on the worker
+    // host. Uploading is retired; serving continues until the 90-day R2
+    // retention lapses so existing PR/issue embeds do not break.
     if (url.pathname.startsWith('/i/') && (request.method === 'GET' || request.method === 'HEAD')) {
       return handleImageServe(request, env);
     }
 
-    // Poll endpoint for pending image uploads (gh image)
-    if (url.pathname === '/image-upload/status' && request.method === 'GET') {
-      return handleImageStatus(request, env);
+    // Retired upload endpoints (/image-upload/offer, /image-upload/status):
+    // answer 410 Gone regardless of method or body, so any client still
+    // polling fails fast with a useful message instead of hanging.
+    if (url.pathname.startsWith('/image-upload/')) {
+      return retiredUploadResponse();
     }
 
     // GitHub App webhook (handled before generic body parsing because the
@@ -421,10 +427,8 @@ export default {
           '/auth/start': 'Start web flow (POST)',
           '/auth/callback': 'OAuth callback (GET)',
           '/auth/poll': 'Poll web flow (POST)',
-          '/image-upload/offer': 'Request pre-signed upload URL from workflow (POST, OIDC)',
-          '/image-upload/status': 'Poll for pre-signed upload URL (GET)',
-          '/i/{owner}/{repo}/{hash}.{ext}': 'Serve uploaded image/video (GET)',
-          '/webhook': 'GitHub App webhook: auto-install image-upload workflow (POST)'
+          '/i/{owner}/{repo}/{hash}.{ext}': 'Serve a previously uploaded image/video (GET); uploading is retired in favor of gh --attach',
+          '/webhook': 'GitHub App webhook (POST)'
         }
       }), {
         status: 200,
@@ -478,10 +482,6 @@ export default {
 
         case '/user-token/refresh':
           response = await handleUserTokenRefresh(request, env, body);
-          break;
-
-        case '/image-upload/offer':
-          response = await handleImageOffer(request, env, body);
           break;
 
         default:
